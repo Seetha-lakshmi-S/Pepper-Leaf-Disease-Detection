@@ -12,40 +12,31 @@ from markupsafe import Markup
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# --- 1. MEMORY OPTIMIZATION (CRITICAL FOR RENDER 512MB) ---
+# --- 1. MEMORY OPTIMIZATION ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1' 
 
 import tensorflow as tf
-# Limit TensorFlow to 1 thread to prevent memory spikes
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
 tf.keras.backend.clear_session()
 
-# Import your prediction utility (Ensure this uses lazy loading internally)
 from predict_utils import run_prediction 
-
-# Allow pymysql to act as MySQLdb
 pymysql.install_as_MySQLdb()
 
 app = Flask(__name__)
 
 # --- 2. CONFIGURATION ---
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-123')
-
-# Database Setup: Auto-detect Render PostgreSQL or fallback to local MySQL
 db_url = os.environ.get('DATABASE_URL', 'mysql+pymysql://root:Seetha%40123@localhost/pepguard_db')
 if db_url and db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Local temp storage
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Cloudinary Setup
 cloudinary.config( 
     cloud_name = "do7xycqmw", 
     api_key = "575413169736574", 
@@ -59,8 +50,7 @@ login_manager.login_view = 'login'
 
 # --- 3. HELPERS & FILTERS ---
 def get_ist_time(dt=None):
-    if dt is None:
-        dt = datetime.now()
+    if dt is None: dt = datetime.now()
     ist = ZoneInfo("Asia/Kolkata")
     return dt.astimezone(ist)
 
@@ -108,7 +98,6 @@ class DiseaseInfo(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- 5. DATABASE SEEDER ---
 def seed_database_from_json():
     try:
         json_path = os.path.join(app.root_path, 'disease_data.json')
@@ -128,10 +117,9 @@ def seed_database_from_json():
                         follow_up=clean(item.get('follow_up', 'Monitor regularly.'))
                     ))
             db.session.commit()
-    except Exception as e:
-        print(f"Seed Error: {e}")
+    except Exception as e: print(f"Seed Error: {e}")
 
-# --- 6. ROUTES ---
+# --- 5. ROUTES ---
 @app.route('/')
 def landing():
     if current_user.is_authenticated: return redirect(url_for('dashboard'))
@@ -231,30 +219,22 @@ def diagnose():
         plant_id = request.form.get('plant_id')
         f = request.files.get('leaf_image')
         if not f: return jsonify({'success': False, 'message': 'No file'})
-        
         filename = secure_filename(f"{datetime.now().timestamp()}_{f.filename}")
         local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         f.save(local_path)
-        
         upload_result = cloudinary.uploader.upload(local_path, folder="pepguard_uploads")
-        permanent_url = upload_result['secure_url']
-        
         disease, stage, conf = run_prediction(local_path)
-        
         new_pred = Prediction(
-            user_id=current_user.id, plant_id=plant_id, image_filename=permanent_url,
+            user_id=current_user.id, plant_id=plant_id, image_filename=upload_result['secure_url'],
             result=disease, severity=stage, confidence=conf, timestamp=get_ist_time()
         )
         db.session.add(new_pred)
         db.session.commit()
-        
         if os.path.exists(local_path): os.remove(local_path)
-            
         return jsonify({'success': True, 'redirect': url_for('show_result', prediction_id=new_pred.id)})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+    except Exception as e: return jsonify({'success': False, 'message': str(e)})
 
-# --- 7. STARTUP ---
+# --- 6. STARTUP ---
 with app.app_context():
     db.create_all()
     seed_database_from_json()
