@@ -3,8 +3,15 @@ from tensorflow import keras
 import numpy as np
 from PIL import Image
 import traceback
+import os
 
-# --- ALL Custom Components (MATCHES TRAINING) ---
+# --- MEMORY HYGIENE ---
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
+
+# --- ALL Custom Components ---
 def capsule_length(vectors):
     return tf.sqrt(tf.reduce_sum(tf.square(vectors), axis=-1))
 
@@ -32,7 +39,6 @@ class CapsuleLayer(keras.layers.Layer):
     def call(self, inputs, training=None):
         inputs_hat = tf.einsum('bji,jkio->bkjo', inputs, self.W)
         b = tf.zeros(shape=[tf.shape(inputs)[0], self.num_capsule, self.input_num_capsule])
-        
         for i in range(self.routings):
             c = tf.nn.softmax(b, axis=1)
             s_j = tf.einsum('bkl,bkld->bkd', c, inputs_hat)
@@ -56,10 +62,6 @@ def margin_loss(y_true, y_pred):
         0.5 * (1 - y_true) * tf.square(tf.maximum(0., y_pred - 0.1))
     return tf.reduce_mean(tf.reduce_sum(L, axis=1))
 
-# --- MODEL PATHS ---
-BINARY_MODEL_PATH = "binary_classifier_dataset_model.keras"
-SEVERITY_MODEL_PATH = "severity_classifier_dataset_model.keras"
-
 custom_objects = {
     'CapsuleLayer': CapsuleLayer,
     'margin_loss': margin_loss,
@@ -67,81 +69,52 @@ custom_objects = {
     'capsule_length': capsule_length
 }
 
-# Global models
-binary_model = None
-severity_model = None
+# --- LAZY LOADING STRATEGY ---
+# We do NOT load models at the top level anymore to save RAM during startup
+BINARY_MODEL_PATH = "binary_classifier_dataset_model.keras"
+SEVERITY_MODEL_PATH = "severity_classifier_dataset_model.keras"
 
-# --- LOAD MODELS ---
-try:
-    binary_model = keras.models.load_model(BINARY_MODEL_PATH, custom_objects=custom_objects)
-    severity_model = keras.models.load_model(SEVERITY_MODEL_PATH, custom_objects=custom_objects)
-    print("✅ AI models loaded successfully.")
-except Exception as e:
-    print(f"❌ Error loading models: {e}")
-    traceback.print_exc()
-
-# --- CAPSULE CONFIDENCE (RAW LENGTHS) ---
-def capsule_confidence(capsule_outputs):
-    """Returns raw capsule lengths (matches margin_loss training)"""
-    return np.clip(capsule_outputs.numpy(), 0.0, 1.0)
-
-# --- MAIN PREDICTION FUNCTION ---
 def run_prediction(image_path):
-    """
-    Input: image_path
-    Output: (disease_name, severity_label, confidence)
-    """
-    global binary_model, severity_model
-
-    if not binary_model or not severity_model:
-        return "ModelNotLoaded", None, 0.0
-
     try:
-        # --- LOAD IMAGE ---
+        # Load Image
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB':
             img = img.convert('RGB')
         img_array = np.array(img) / 255.0
         img_array = tf.expand_dims(img_array.astype(np.float32), 0)
 
-        # --- STAGE 1: BINARY ---
+        # 1. Load & Run Binary Model
+        # compile=False saves significant memory
+        binary_model = keras.models.load_model(BINARY_MODEL_PATH, custom_objects=custom_objects, compile=False)
         binary_preds = binary_model.predict(img_array, verbose=0)[0]
+        
         binary_class_names = ['Diseased', 'Healthy']
         binary_index = np.argmax(binary_preds)
         binary_result = binary_class_names[binary_index]
-        binary_confidence = float(np.clip(binary_preds[binary_index], 0.0, 1.0))
+        binary_conf = float(np.clip(binary_preds[binary_index], 0.0, 1.0))
 
-        # Healthy → early exit
+        # IMPORTANT: Delete model from RAM immediately after use
+        del binary_model
+        keras.backend.clear_session()
+
         if binary_result == 'Healthy':
-            return "Healthy", None, binary_confidence
+            return "Healthy", None, binary_conf
 
-        # --- STAGE 2: SEVERITY ---
+        # 2. Load & Run Severity Model (Only if diseased)
+        severity_model = keras.models.load_model(SEVERITY_MODEL_PATH, custom_objects=custom_objects, compile=False)
         severity_preds = severity_model.predict(img_array, verbose=0)[0]
+        
         severity_class_names = ["1_Early_Stage", "2_Mid_Stage", "3_Advanced_Stage"]
         severity_index = np.argmax(severity_preds)
-        severity_class = severity_class_names[severity_index]
-        severity_label = severity_class.split('_', 1)[1].replace('_', ' ')
-        severity_confidence = float(np.clip(severity_preds[severity_index], 0.0, 1.0))
+        severity_label = severity_class_names[severity_index].split('_', 1)[1].replace('_', ' ')
+        severity_conf = float(np.clip(severity_preds[severity_index], 0.0, 1.0))
 
-        # Confidence threshold
-        if severity_confidence < 0.60:
-            return "Uncertain-Retake", None, severity_confidence
+        # Cleanup again
+        del severity_model
+        keras.backend.clear_session()
 
-        return ("Bacterial Disease", severity_label, severity_confidence)
+        return ("Bacterial Disease", severity_label, severity_conf)
 
     except Exception as e:
         print(f"❌ Prediction error: {e}")
-        traceback.print_exc()
         return "PredictionError", None, 0.0
-
-# --- TEST FUNCTION ---
-def test_prediction(image_path):
-    """Run single image test with debug output"""
-    result = run_prediction(image_path)
-    print(f"🧪 Test Prediction: {result}")
-    return result
-
-# --- MAIN ---
-if __name__ == "__main__":
-    print("🏥 PepperGuard AI Prediction Engine")
-    test_prediction("test.jpg")
