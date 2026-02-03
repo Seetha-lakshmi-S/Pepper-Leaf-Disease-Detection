@@ -5,13 +5,13 @@ from PIL import Image
 import traceback
 import os
 
-# --- MEMORY HYGIENE ---
+# --- 1. MEMORY & CPU HYGIENE ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
 
-# --- ALL Custom Components ---
+# --- 2. CUSTOM CAPSULE COMPONENTS ---
 def capsule_length(vectors):
     return tf.sqrt(tf.reduce_sum(tf.square(vectors), axis=-1))
 
@@ -69,23 +69,28 @@ custom_objects = {
     'capsule_length': capsule_length
 }
 
-# --- LAZY LOADING STRATEGY ---
-# We do NOT load models at the top level anymore to save RAM during startup
-BINARY_MODEL_PATH = "binary_classifier_dataset_model.keras"
-SEVERITY_MODEL_PATH = "severity_classifier_dataset_model.keras"
+# --- 3. PATH FIXES ---
+# Using absolute paths ensures Render finds the files
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BINARY_MODEL_PATH = os.path.join(BASE_DIR, "binary_classifier_dataset_model.keras")
+SEVERITY_MODEL_PATH = os.path.join(BASE_DIR, "severity_classifier_dataset_model.keras")
 
+# --- 4. PREDICTION LOGIC ---
 def run_prediction(image_path):
     try:
-        # Load Image
+        # Load and Preprocess Image
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB':
             img = img.convert('RGB')
         img_array = np.array(img) / 255.0
         img_array = tf.expand_dims(img_array.astype(np.float32), 0)
 
-        # 1. Load & Run Binary Model
-        # compile=False saves significant memory
-        binary_model = keras.models.load_model(BINARY_MODEL_PATH, custom_objects=custom_objects, compile=False)
+        # 1. Binary Stage
+        if not os.path.exists(BINARY_MODEL_PATH):
+            print(f"❌ Missing binary model at {BINARY_MODEL_PATH}")
+            return "ModelMissing", None, 0.0
+
+        binary_model = keras.models.load_model(BINARY_MODEL_PATH, custom_objects=custom_objects)
         binary_preds = binary_model.predict(img_array, verbose=0)[0]
         
         binary_class_names = ['Diseased', 'Healthy']
@@ -93,15 +98,18 @@ def run_prediction(image_path):
         binary_result = binary_class_names[binary_index]
         binary_conf = float(np.clip(binary_preds[binary_index], 0.0, 1.0))
 
-        # IMPORTANT: Delete model from RAM immediately after use
         del binary_model
         keras.backend.clear_session()
 
         if binary_result == 'Healthy':
             return "Healthy", None, binary_conf
 
-        # 2. Load & Run Severity Model (Only if diseased)
-        severity_model = keras.models.load_model(SEVERITY_MODEL_PATH, custom_objects=custom_objects, compile=False)
+        # 2. Severity Stage
+        if not os.path.exists(SEVERITY_MODEL_PATH):
+            print(f"❌ Missing severity model at {SEVERITY_MODEL_PATH}")
+            return "Bacterial Disease", "Unknown", binary_conf
+
+        severity_model = keras.models.load_model(SEVERITY_MODEL_PATH, custom_objects=custom_objects)
         severity_preds = severity_model.predict(img_array, verbose=0)[0]
         
         severity_class_names = ["1_Early_Stage", "2_Mid_Stage", "3_Advanced_Stage"]
@@ -109,7 +117,6 @@ def run_prediction(image_path):
         severity_label = severity_class_names[severity_index].split('_', 1)[1].replace('_', ' ')
         severity_conf = float(np.clip(severity_preds[severity_index], 0.0, 1.0))
 
-        # Cleanup again
         del severity_model
         keras.backend.clear_session()
 
@@ -117,4 +124,5 @@ def run_prediction(image_path):
 
     except Exception as e:
         print(f"❌ Prediction error: {e}")
+        traceback.print_exc()
         return "PredictionError", None, 0.0
