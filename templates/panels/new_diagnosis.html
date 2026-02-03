@@ -1,0 +1,48 @@
+<div class="panel-header">
+    <h2>📸 New Diagnosis</h2>
+    <p>Upload a photo to get an instant health check.</p>
+</div>
+
+<div class="diagnosis-layout">
+    
+    <div class="diagnosis-info-card">
+        <h3 class="info-title">💡 Best Practices</h3>
+        <ul class="tips-list">
+            <li><b>Lighting:</b> Ensure the leaf is well-lit but avoid extreme glare.</li>
+            <li><b>Focus:</b> Keep the leaf in the center and in sharp focus.</li>
+            <li><b>Background:</b> A plain background works best.</li>
+            <li><b>One Leaf:</b> Try to capture one leaf per photo.</li>
+        </ul>
+        <div class="decoration-icon">🍃</div>
+    </div>
+
+    <div class="diagnosis-form-container">
+        <form id="diagnoseForm" enctype="multipart/form-data">
+            
+            <div class="form-group">
+                <label for="plant_id">Plant ID / Name</label>
+                <input type="text" name="plant_id" id="plant_id" placeholder="e.g. Garden Row 3 - Plant A" required>
+            </div>
+
+            <label for="leaf_image" class="upload-label">
+                <div class="upload-icon-large">📷</div>
+                <h4>Tap to Scan Leaf</h4>
+                <p>Select <b>Camera</b> or <b>Gallery</b></p>
+                
+                <input type="file" 
+                       name="leaf_image" 
+                       id="leaf_image" 
+                       class="hidden-input" 
+                       accept="image/*" 
+                       required>
+                
+                <p id="file-name-display" class="file-name-display"></p>
+            </label>
+
+            <button type="submit" class="btn-primary btn-upload" id="diagnoseBtn">
+                <span class="btn-text">Run Diagnosis 🚀</span>
+                <span class="spinner" style="display: none;">⏳</span>
+            </button>
+        </form>
+    </div>
+</div>

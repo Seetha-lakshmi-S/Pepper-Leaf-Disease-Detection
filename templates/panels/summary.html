@@ -1,0 +1,39 @@
+<div class="panel-header">
+    <h2>📊 Farm Health Report</h2>
+    <p>Real-time statistics of your monitored crops.</p>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon icon-blue">🌱</div>
+        <div class="stat-info">
+            <h3>{{ summary.total_plants }}</h3>
+            <p>Total Plants</p>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon icon-green">🛡️</div>
+        <div class="stat-info">
+            <h3>{{ summary.healthy }}</h3>
+            <p>Healthy</p>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon icon-red">⚠️</div>
+        <div class="stat-info">
+            <h3>{{ summary.diseased_total }}</h3>
+            <p>Needs Attention</p>
+        </div>
+    </div>
+</div>
+
+<div class="info-card">
+    <h3>Severity Distribution</h3>
+    <div class="chart-wrapper">
+        <canvas id="severityChart" 
+                data-counts="[{{ summary.healthy }}, {{ summary.early }}, {{ summary.mid }}, {{ summary.advanced }}]">
+        </canvas>
+    </div>
+</div>

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - PepGuard</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='mascot.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
+</head>
+<body class="dashboard-body">
+    <div class="app-container">
+        
+        <header class="app-header">
+            <div style="display: flex; align-items: center;">
+                <button class="menu-toggle mobile-only" id="menu-toggle">☰</button>
+                <div class="header-title">PepGuard Dashboard</div>
+            </div>
+
+            <nav class="header-nav desktop-only">
+                <a href="#" class="header-link js-switch-panel" data-panel="welcome">Home</a>
+                <a href="#" class="header-link js-scroll-link" data-target="how-it-works">How It Works</a>
+                <a href="#" class="header-link js-scroll-link" data-target="features">Features</a>
+            </nav>
+            
+            <div class="user-menu-header desktop-only">
+                <div class="user-menu">
+                    <span id="user-dropdown" class="user-name">👤 {{ current_user.username }} ▼</span>
+                    <div id="logout-dropdown" class="logout-dropdown" style="display: none;">
+                        <a href="{{ url_for('logout') }}" class="logout-link">Logout</a>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <aside class="app-sidebar" id="app-sidebar">
+            <div class="sidebar-header">
+                <a class="nav-brand" href="#" style="text-decoration: none; color: white;">
+                    <div class="brand-icon">🌶️</div>
+                    <div class="brand-text">PepGuard</div>
+                </a>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-link active" data-panel="welcome">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-text">Home</span>
+                </a>
+                <a href="#" class="nav-link" data-panel="new_diagnosis">
+                    <span class="nav-icon">📸</span>
+                    <span class="nav-text">Diagnose</span>
+                </a>
+                <a href="#" class="nav-link" data-panel="history">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">History</span>
+                </a>
+                <a href="#" class="nav-link" data-panel="summary">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">Summary</span>
+                </a>
+                
+                <a href="{{ url_for('logout') }}" class="nav-link mobile-only" style="margin-top: auto; border-top: 1px solid rgba(255,255,255,0.1);">
+                    <span class="nav-icon">🚪</span>
+                    <span class="nav-text">Log Out</span>
+                </a>
+            </nav>
+        </aside>
+        
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+        <main class="main-content" id="main-content">
+            {% include 'panels/welcome.html' %}
+        </main>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div id="flash-messages" style="display: none;">
+                {% for category, message in messages %}
+                    <div data-category="{{ category }}" data-message="{{ message }}"></div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"
+        integrity="sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

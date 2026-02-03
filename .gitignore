@@ -1,0 +1,37 @@
+# Environments
+.venv/
+venv/
+.vscode/
+env/
+.env
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# AI/Machine Learning
+.ipynb_checkpoints/
+# If your .h5 or .keras model is huge, you might ignore it, 
+# but usually, you WANT the model on GitHub for deployment.
+
+# Uploads
+static/uploads/*
+!static/uploads/.gitkeep
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Ignore heavy dataset folders
+dataset/
+dataset_preprocessed/
+dataset_segmented/
+verification_outputs/
+Training_dataset_severity_sorted/
+binary_classifier_dataset/
+severity_classifier_dataset/
+
+# Specific Files to Ignore
+disease_features.csv
