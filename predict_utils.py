@@ -10,7 +10,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 # --- 2. GLOBAL CUSTOM FUNCTIONS ---
-# Added 'safe' registration to ensure Lambda layers find these during deserialization
 @keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
@@ -19,7 +18,7 @@ def squash(vectors, axis=-1):
 
 @keras.utils.register_keras_serializable(package="Custom")
 def capsule_length(vectors):
-    return tf.sqrt(tf.reduce_sum(tf.square(vectors), axis=-1))
+    return tf.sqrt(tf.reduce_sum(tf.square(vectors), axis=-1) + keras.backend.epsilon())
 
 # --- 3. CUSTOM CAPSULE LAYER ---
 @keras.utils.register_keras_serializable(package="Custom")
@@ -79,14 +78,15 @@ def run_prediction(image_path):
         }
 
         base_path = os.path.dirname(os.path.abspath(__file__))
-        binary_path = os.path.join(base_path, "binary_classifier_dataset_model.keras")
-        severity_path = os.path.join(base_path, "severity_classifier_dataset_model.keras")
+        
+        # CHANGED: Now pointing to the universal .h5 files
+        binary_path = os.path.join(base_path, "binary_classifier_dataset_model.h5")
+        severity_path = os.path.join(base_path, "severity_classifier_dataset_model.h5")
 
         # --- STEP 1: BINARY DIAGNOSIS ---
         if not os.path.exists(binary_path):
             raise FileNotFoundError(f"Binary model missing at {binary_path}")
 
-        # Removed safe_mode=False because it is not supported in Keras 2.12
         m_binary = keras.models.load_model(
             binary_path, 
             custom_objects=custom_map, 
@@ -96,7 +96,7 @@ def run_prediction(image_path):
         preds_bin = m_binary.predict(img_array, verbose=0)[0]
         idx_bin = np.argmax(preds_bin)
         
-        # NOTE: Verify if 0 is Diseased and 1 is Healthy in your specific training
+        # Logic: 0 = Diseased, 1 = Healthy
         is_diseased = (idx_bin == 0) 
         conf_bin = float(preds_bin[idx_bin])
 
@@ -110,7 +110,6 @@ def run_prediction(image_path):
         if not os.path.exists(severity_path):
             return "Bacterial Disease", "Unknown Stage", conf_bin
 
-        # Removed safe_mode=False here as well
         m_severity = keras.models.load_model(
             severity_path, 
             custom_objects=custom_map, 
