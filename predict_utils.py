@@ -10,19 +10,19 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 # --- 2. GLOBAL CUSTOM FUNCTIONS ---
-# These MUST be global so the Lambda layers in your .keras file can see them
-@keras.utils.register_keras_serializable()
+# Added 'safe' registration to ensure Lambda layers find these during deserialization
+@keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
     scale = s_squared_norm / (1 + s_squared_norm) / tf.sqrt(s_squared_norm + keras.backend.epsilon())
     return scale * vectors
 
-@keras.utils.register_keras_serializable()
+@keras.utils.register_keras_serializable(package="Custom")
 def capsule_length(vectors):
     return tf.sqrt(tf.reduce_sum(tf.square(vectors), axis=-1))
 
 # --- 3. CUSTOM CAPSULE LAYER ---
-@keras.utils.register_keras_serializable()
+@keras.utils.register_keras_serializable(package="Custom")
 class CapsuleLayer(keras.layers.Layer):
     def __init__(self, num_capsule, dim_capsule, routings=3, **kwargs):
         super(CapsuleLayer, self).__init__(**kwargs)
@@ -31,7 +31,6 @@ class CapsuleLayer(keras.layers.Layer):
         self.routings = routings
 
     def build(self, input_shape):
-        # input_shape is [None, num_vectors, dim_vector]
         self.input_num_capsule = input_shape[1]
         self.input_dim_capsule = input_shape[2]
         self.W = self.add_weight(
@@ -41,7 +40,6 @@ class CapsuleLayer(keras.layers.Layer):
         )
 
     def call(self, inputs):
-        # Dynamic routing logic
         inputs_hat = tf.einsum('bji,jkio->bkjo', inputs, self.W)
         b = tf.zeros(shape=[tf.shape(inputs)[0], self.num_capsule, self.input_num_capsule])
         
@@ -65,17 +63,13 @@ class CapsuleLayer(keras.layers.Layer):
 
 # --- 4. PREDICTION ENGINE ---
 def run_prediction(image_path):
-    """
-    Inputs: path to image file
-    Returns: (disease_name, severity_label, confidence_score)
-    """
     try:
         # Load and Preprocess Image
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB':
             img = img.convert('RGB')
         img_array = np.array(img) / 255.0
-        img_array = tf.expand_dims(img_array.astype(np.float32), 0)
+        img_array = np.expand_dims(img_array.astype(np.float32), 0)
 
         # Map custom objects for Keras loader
         custom_map = {
@@ -84,7 +78,6 @@ def run_prediction(image_path):
             'capsule_length': capsule_length
         }
 
-        # Define paths
         base_path = os.path.dirname(os.path.abspath(__file__))
         binary_path = os.path.join(base_path, "binary_classifier_dataset_model.keras")
         severity_path = os.path.join(base_path, "severity_classifier_dataset_model.keras")
@@ -93,14 +86,21 @@ def run_prediction(image_path):
         if not os.path.exists(binary_path):
             raise FileNotFoundError(f"Binary model missing at {binary_path}")
 
-        m_binary = keras.models.load_model(binary_path, custom_objects=custom_map, compile=False)
+        # Added safe_mode=False to bypass the 'Functional' deserialization block
+        m_binary = keras.models.load_model(
+            binary_path, 
+            custom_objects=custom_map, 
+            compile=False, 
+            safe_mode=False
+        )
+        
         preds_bin = m_binary.predict(img_array, verbose=0)[0]
         idx_bin = np.argmax(preds_bin)
         
-        is_diseased = (idx_bin == 0) # Assumes 0=Diseased, 1=Healthy
+        # NOTE: Verify if 0 is Diseased and 1 is Healthy in your specific training
+        is_diseased = (idx_bin == 0) 
         conf_bin = float(preds_bin[idx_bin])
 
-        # Immediate Cleanup to save RAM
         del m_binary
         keras.backend.clear_session()
 
@@ -111,7 +111,13 @@ def run_prediction(image_path):
         if not os.path.exists(severity_path):
             return "Bacterial Disease", "Unknown Stage", conf_bin
 
-        m_severity = keras.models.load_model(severity_path, custom_objects=custom_map, compile=False)
+        m_severity = keras.models.load_model(
+            severity_path, 
+            custom_objects=custom_map, 
+            compile=False, 
+            safe_mode=False
+        )
+        
         preds_sev = m_severity.predict(img_array, verbose=0)[0]
         idx_sev = np.argmax(preds_sev)
         
@@ -119,7 +125,6 @@ def run_prediction(image_path):
         res_stage = stages[idx_sev]
         conf_sev = float(preds_sev[idx_sev])
 
-        # Final Cleanup
         del m_severity
         keras.backend.clear_session()
 
