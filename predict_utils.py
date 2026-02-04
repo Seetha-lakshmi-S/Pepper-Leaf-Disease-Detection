@@ -86,12 +86,11 @@ def run_prediction(image_path):
         if not os.path.exists(binary_path):
             raise FileNotFoundError(f"Binary model missing at {binary_path}")
 
-        # Added safe_mode=False to bypass the 'Functional' deserialization block
+        # Removed safe_mode=False because it is not supported in Keras 2.12
         m_binary = keras.models.load_model(
             binary_path, 
             custom_objects=custom_map, 
-            compile=False, 
-            safe_mode=False
+            compile=False
         )
         
         preds_bin = m_binary.predict(img_array, verbose=0)[0]
@@ -111,11 +110,11 @@ def run_prediction(image_path):
         if not os.path.exists(severity_path):
             return "Bacterial Disease", "Unknown Stage", conf_bin
 
+        # Removed safe_mode=False here as well
         m_severity = keras.models.load_model(
             severity_path, 
             custom_objects=custom_map, 
-            compile=False, 
-            safe_mode=False
+            compile=False
         )
         
         preds_sev = m_severity.predict(img_array, verbose=0)[0]
