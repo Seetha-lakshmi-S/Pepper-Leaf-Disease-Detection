@@ -18,17 +18,28 @@ sys.modules["keras.src.models.functional"] = keras.models
 sys.modules["keras.src.layers"] = keras.layers
 sys.modules["keras.src.saving"] = keras.saving
 
-# B. Patch the 'batch_shape' vs 'input_shape' mismatch
-# Keras 3 saves 'batch_shape' in the config, which Keras 2 doesn't recognize.
-original_from_config = keras.layers.InputLayer.from_config
+# B. THE UNIVERSAL LAYER PATCHER
+# This intercepts configurations for ALL layers to fix DTypePolicy and batch_shape
+original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
-def patched_from_config(cls, config):
+def patched_layer_from_config(cls, config):
+    # Fix 1: Convert complex DTypePolicy back to a simple string (fixes Conv2D error)
+    if "dtype" in config and isinstance(config["dtype"], dict):
+        # Extract 'float32' from the Keras 3 DTypePolicy dictionary
+        if "config" in config["dtype"] and "name" in config["dtype"]["config"]:
+            config["dtype"] = config["dtype"]["config"]["name"]
+        else:
+            config["dtype"] = "float32"
+
+    # Fix 2: Rename 'batch_shape' to 'input_shape' (fixes InputLayer error)
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
-    return original_from_config(config)
+        
+    return original_layer_from_config(config)
 
-keras.layers.InputLayer.from_config = patched_from_config
+# Apply the patch to the base Layer class
+keras.layers.Layer.from_config = patched_layer_from_config
 
 # --- 1. ENVIRONMENT CONFIGURATION ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -87,13 +98,14 @@ class CapsuleLayer(keras.layers.Layer):
 # --- 4. PREDICTION ENGINE ---
 def run_prediction(image_path):
     try:
-        # Image Preprocessing
+        # 1. Image Preprocessing
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB': 
             img = img.convert('RGB')
         img_array = np.array(img) / 255.0
         img_array = np.expand_dims(img_array.astype(np.float32), 0)
 
+        # 2. Setup paths and Custom Objects
         custom_map = {
             'CapsuleLayer': CapsuleLayer, 
             'squash': squash, 
@@ -104,11 +116,11 @@ def run_prediction(image_path):
         binary_path = os.path.join(base_path, "binary_classifier_dataset_model.h5")
         severity_path = os.path.join(base_path, "severity_classifier_dataset_model.h5")
 
-        # Step A: Load Binary Model (Diseased vs Healthy)
+        # 3. Load Binary Model
         m_binary = keras.models.load_model(binary_path, custom_objects=custom_map, compile=False)
         preds_bin = m_binary.predict(img_array, verbose=0)[0]
         idx_bin = np.argmax(preds_bin)
-        is_diseased = (idx_bin == 0) # Adjust index based on your training labels
+        is_diseased = (idx_bin == 0) 
         conf_bin = float(preds_bin[idx_bin])
         
         del m_binary
@@ -117,7 +129,7 @@ def run_prediction(image_path):
         if not is_diseased:
             return "Healthy", None, conf_bin
 
-        # Step B: Load Severity Model
+        # 4. Load Severity Model
         m_severity = keras.models.load_model(severity_path, custom_objects=custom_map, compile=False)
         preds_sev = m_severity.predict(img_array, verbose=0)[0]
         stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
