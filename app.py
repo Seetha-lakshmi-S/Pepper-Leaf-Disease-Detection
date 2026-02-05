@@ -1,10 +1,8 @@
 import os
 import json
-import uuid
 import pymysql
 import cloudinary
 import cloudinary.uploader
-import traceback
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -13,23 +11,22 @@ from werkzeug.utils import secure_filename
 from markupsafe import Markup
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from predict_utils import run_prediction 
 
-# TensorFlow AFTER predict_utils
-import tensorflow as tf
+# --- 1. MEMORY OPTIMIZATION ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1' 
+
+import tensorflow as tf
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
 tf.keras.backend.clear_session()
 
+from predict_utils import run_prediction 
 pymysql.install_as_MySQLdb()
 
 app = Flask(__name__)
 
-# ========================================
-# CONFIGURATION (Render Optimized)
-# ========================================
+# --- 2. CONFIGURATION ---
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-123')
 db_url = os.environ.get('DATABASE_URL', 'mysql+pymysql://root:Seetha%40123@localhost/pepguard_db')
 if db_url and db_url.startswith("postgres://"):
@@ -37,12 +34,9 @@ if db_url and db_url.startswith("postgres://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# RENDER: Use /tmp instead of static/uploads
-app.config['UPLOAD_FOLDER'] = '/tmp'
+app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Cloudinary Config
 cloudinary.config( 
     cloud_name = "do7xycqmw", 
     api_key = "575413169736574", 
@@ -54,9 +48,7 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# ========================================
-# HELPERS & FILTERS
-# ========================================
+# --- 3. HELPERS & FILTERS ---
 def get_ist_time(dt=None):
     if dt is None: dt = datetime.now()
     ist = ZoneInfo("Asia/Kolkata")
@@ -77,9 +69,7 @@ def nl2br(value):
     if not value: return ""
     return Markup("<br>".join(str(value).splitlines()))
 
-# ========================================
-# DATABASE MODELS
-# ========================================
+# --- 4. MODELS ---
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
@@ -127,22 +117,17 @@ def seed_database_from_json():
                         follow_up=clean(item.get('follow_up', 'Monitor regularly.'))
                     ))
             db.session.commit()
-    except Exception as e: 
-        print(f"Seed Error: {e}")
+    except Exception as e: print(f"Seed Error: {e}")
 
-# ========================================
-# ROUTES
-# ========================================
+# --- 5. ROUTES ---
 @app.route('/')
 def landing():
-    if current_user.is_authenticated: 
-        return redirect(url_for('dashboard'))
+    if current_user.is_authenticated: return redirect(url_for('dashboard'))
     return render_template('landing.html')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if current_user.is_authenticated: 
-        return redirect(url_for('dashboard'))
+    if current_user.is_authenticated: return redirect(url_for('dashboard'))
     if request.method == 'POST':
         user = User.query.filter_by(username=request.form.get('username')).first()
         if user and check_password_hash(user.password, request.form.get('password')):
@@ -186,8 +171,7 @@ def get_panel(panel_name):
         latest = {p.plant_id: p for p in all_preds}
         summary = {"total_plants": len(latest), "healthy": 0, "early": 0, "mid": 0, "advanced": 0, "diseased_total": 0}
         for p in latest.values():
-            if p.result == 'Healthy': 
-                summary['healthy'] += 1
+            if p.result == 'Healthy': summary['healthy'] += 1
             else:
                 summary['diseased_total'] += 1
                 sev = (p.severity or "").lower()
@@ -202,20 +186,17 @@ def get_panel(panel_name):
         base = Prediction.query.filter_by(user_id=current_user.id).all()
         history_data = {}
         for p in sorted(base, key=lambda x: x.timestamp, reverse=True):
-            if p.plant_id not in history_data: 
-                history_data[p.plant_id] = {'entries': []}
+            if p.plant_id not in history_data: history_data[p.plant_id] = {'entries': []}
             history_data[p.plant_id]['entries'].append(p)
         for plant_id, data in history_data.items():
             data['entries'].sort(key=lambda x: x.timestamp)
-            for idx, entry in enumerate(data['entries']): 
-                entry.is_followup = (idx != 0)
+            for idx, entry in enumerate(data['entries']): entry.is_followup = (idx != 0)
         return render_template('panels/history.html', history_data=history_data)
     if panel_name.startswith('result/'):
         try:
             pred_id = int(panel_name.split('/')[1])
             return get_result_panel(pred_id)
-        except: 
-            pass
+        except: pass
     return "Panel not found", 404
 
 @app.route('/get_panel/result/<int:prediction_id>')
@@ -231,72 +212,33 @@ def get_result_panel(prediction_id):
 def show_result(prediction_id):
     return redirect(url_for('dashboard') + f'#result-{prediction_id}')
 
-# ========================================
-# CRITICAL: FIXED DIAGNOSE ROUTE (Render /tmp)
-# ========================================
 @app.route('/diagnose', methods=['POST'])
 @login_required
 def diagnose():
     try:
-        print("🔄 DIAGNOSE STARTED")  # Render logs
-        
-        plant_id = request.form.get('plant_id', 'Unknown Plant')
+        plant_id = request.form.get('plant_id')
         f = request.files.get('leaf_image')
-        if not f or f.filename == '':
-            return jsonify({'success': False, 'message': 'No image file selected'})
-        
-        # RENDER FIX: Use /tmp directory
-        filename = secure_filename(f"{uuid.uuid4()}_{f.filename}")
-        temp_path = os.path.join('/tmp', filename)
-        
-        print(f"📸 Saving to: {temp_path}")
-        f.save(temp_path)
-        
-        # PREDICT FIRST (before Cloudinary - critical!)
-        print("🤖 Running prediction...")
-        disease, stage, conf = run_prediction(temp_path)
-        print(f"✅ Prediction: {disease}, {stage}, {conf}")
-        
-        # Cloudinary upload AFTER prediction
-        print("☁️ Uploading to Cloudinary...")
-        upload_result = cloudinary.uploader.upload(temp_path, folder="pepguard_uploads")
-        
-        # Save to database
+        if not f: return jsonify({'success': False, 'message': 'No file'})
+        filename = secure_filename(f"{datetime.now().timestamp()}_{f.filename}")
+        local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        f.save(local_path)
+        upload_result = cloudinary.uploader.upload(local_path, folder="pepguard_uploads")
+        disease, stage, conf = run_prediction(local_path)
         new_pred = Prediction(
-            user_id=current_user.id, 
-            plant_id=plant_id, 
-            image_filename=upload_result['secure_url'],
-            result=disease, 
-            severity=stage, 
-            confidence=conf, 
-            timestamp=get_ist_time()
+            user_id=current_user.id, plant_id=plant_id, image_filename=upload_result['secure_url'],
+            result=disease, severity=stage, confidence=conf, timestamp=get_ist_time()
         )
         db.session.add(new_pred)
         db.session.commit()
-        
-        # CLEANUP: Remove temp file
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            print("🧹 Temp file cleaned")
-        
-        print(f"🎉 SUCCESS: Prediction ID {new_pred.id}")
-        return jsonify({
-            'success': True, 
-            'redirect': url_for('show_result', prediction_id=new_pred.id)
-        })
-        
-    except Exception as e:
-        print(f"❌ DIAGNOSE ERROR: {str(e)}")
-        print(traceback.format_exc())  # Full stack trace for Render logs
-        return jsonify({'success': False, 'message': f'Prediction failed: {str(e)}'})
+        if os.path.exists(local_path): os.remove(local_path)
+        return jsonify({'success': True, 'redirect': url_for('show_result', prediction_id=new_pred.id)})
+    except Exception as e: return jsonify({'success': False, 'message': str(e)})
 
-# ========================================
-# STARTUP
-# ========================================
+# --- 6. STARTUP ---
 with app.app_context():
     db.create_all()
     seed_database_from_json()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
