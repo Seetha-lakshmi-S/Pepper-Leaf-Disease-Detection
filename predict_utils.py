@@ -6,50 +6,61 @@ from PIL import Image
 import os
 import traceback
 
-# --- 1. COMPATIBILITY BRIDGE (KERAS 3 TO 2) ---
+# --- 1. COMPATIBILITY BRIDGE (RECURSION SAFE) ---
 import keras.models
 import keras.layers
 import keras.saving
 
+# Redirect internal Keras 3 paths to Keras 2
 sys.modules["keras.src"] = keras
 sys.modules["keras.src.models"] = keras.models
 sys.modules["keras.src.layers"] = keras.layers
 sys.modules["keras.src.saving"] = keras.saving
 
-# 🔥 THE "SILVER BULLET" PATCHER
-# This intercepts Conv2D layers so they don't crash the base Layer class
 original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
 def patched_layer_from_config(cls, config):
-    # A. DType Fix
+    """
+    Patches the Keras Layer loader to handle Keras 3 metadata and 
+    redirect Conv2D configs to the correct class loader.
+    """
+    # A. DType Fix: Convert dictionary dtypes to strings
     if "dtype" in config and isinstance(config["dtype"], dict):
         config["dtype"] = config["dtype"].get("config", {}).get("name", "float32")
     
-    # B. Clean Keras 3 exclusive metadata
+    # B. Clean Keras 3 exclusive metadata that Keras 2 doesn't recognize
     for key in ["sparse", "ragged", "registered_name", "module"]:
         config.pop(key, None)
     
-    # C. Input Shape Fix
+    # C. Input Shape Fix: Map Keras 3 batch_shape to Keras 2 input_shape
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
 
-    # 🔥 D. MANUAL CLASS ROUTING (Solves kernel_size / filters errors)
+    # 🔥 D. RECURSION-SAFE CONV2D ROUTING
+    # We only intercept if the class being called is the BASE Layer class.
+    # This prevents the "RecursionError" when Conv2D calls its own from_config.
     layer_name = config.get('name', '').lower()
     class_name = config.get('class_name', '').lower()
 
-    if 'conv2d' in layer_name or 'conv2d' in class_name:
-        # Standardize filters vs num_filters for the loader
+    if cls is keras.layers.Layer and ('conv2d' in layer_name or 'conv2d' in class_name):
+        # Standardize parameter naming
         if 'num_filters' in config:
             config['filters'] = config.pop('num_filters')
-        # Bypass generic Layer class and use Conv2D's own loader
+        elif 'filters' in config:
+            # Ensure consistency if the model expects one specifically
+            config['filters'] = config['filters']
+            
+        # Manually route to Conv2D class loader
         return keras.layers.Conv2D.from_config(config)
     
+    # Use the original method for all other layers or when cls is already a subclass
     return original_layer_from_config(config)
 
+# Apply the global patch
 keras.layers.Layer.from_config = patched_layer_from_config
 
-# --- 2. CUSTOM CAPSULE LAYERS ---
+# --- 2. CUSTOM LAYERS ---
 @keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
@@ -89,41 +100,60 @@ class CapsuleLayer(keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config()
-        config.update({'num_capsule': self.num_capsule, 'dim_capsule': self.dim_capsule, 'routings': self.routings})
+        config.update({
+            'num_capsule': self.num_capsule, 
+            'dim_capsule': self.dim_capsule, 
+            'routings': self.routings
+        })
         return config
 
 # --- 3. PREDICTION ENGINE ---
 def run_prediction(image_path):
     try:
+        # Preprocessing
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB': img = img.convert('RGB')
         img_array = np.array(img) / 255.0
         img_array = np.expand_dims(img_array.astype(np.float32), 0)
 
-        custom_map = {'CapsuleLayer': CapsuleLayer, 'squash': squash, 'capsule_length': capsule_length}
+        custom_map = {
+            'CapsuleLayer': CapsuleLayer, 
+            'squash': squash, 
+            'capsule_length': capsule_length
+        }
+        
         base_path = os.path.dirname(os.path.abspath(__file__))
         
-        # Load Binary Model
-        m_bin = keras.models.load_model(os.path.join(base_path, "binary_classifier_dataset_model.h5"), 
-                                        custom_objects=custom_map, compile=False)
+        # Load and Predict Binary Model
+        binary_model_path = os.path.join(base_path, "binary_classifier_dataset_model.h5")
+        m_bin = keras.models.load_model(binary_model_path, custom_objects=custom_map, compile=False)
         p_bin = m_bin.predict(img_array, verbose=0)[0]
+        
         is_diseased = (np.argmax(p_bin) == 0)
         conf_bin = float(p_bin[np.argmax(p_bin)])
-        del m_bin; keras.backend.clear_session()
+        
+        # Cleanup memory immediately
+        del m_bin
+        keras.backend.clear_session()
 
         if not is_diseased:
             return "Healthy", None, conf_bin
 
-        # Load Severity Model
-        m_sev = keras.models.load_model(os.path.join(base_path, "severity_classifier_dataset_model.h5"), 
-                                        custom_objects=custom_map, compile=False)
+        # Load and Predict Severity Model
+        severity_model_path = os.path.join(base_path, "severity_classifier_dataset_model.h5")
+        m_sev = keras.models.load_model(severity_model_path, custom_objects=custom_map, compile=False)
         p_sev = m_sev.predict(img_array, verbose=0)[0]
+        
         stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
         res_stage = stages[np.argmax(p_sev)]
         conf_sev = float(p_sev[np.argmax(p_sev)])
-        del m_sev; keras.backend.clear_session()
+        
+        del m_sev
+        keras.backend.clear_session()
 
         return ("Bacterial Disease", res_stage, conf_sev)
+
     except Exception as e:
+        print("❌ Prediction Engine Failed:")
         traceback.print_exc()
         return "PredictionError", None, 0.0
