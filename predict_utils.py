@@ -6,7 +6,7 @@ from PIL import Image
 import os
 import traceback
 
-# --- 0. THE COMPATIBILITY BRIDGE (FIXES KERAS 3 -> 2 ERRORS) ---
+# --- 0. THE COMPATIBILITY BRIDGE (KERAS 3 TO 2 TRANSLATOR) ---
 import keras.models
 import keras.layers
 import keras.saving
@@ -18,32 +18,36 @@ sys.modules["keras.src.models.functional"] = keras.models
 sys.modules["keras.src.layers"] = keras.layers
 sys.modules["keras.src.saving"] = keras.saving
 
-# B. THE UNIVERSAL LAYER PATCHER
-# This intercepts configurations for ALL layers to clean out Keras 3 metadata
+# B. THE SMART LAYER PATCHER
+# This intercepts configurations to clean out Keras 3 metadata only where safe
 original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
 def patched_layer_from_config(cls, config):
-    # Fix 1: Convert complex DTypePolicy back to a simple string
+    # 1. Clean DTypePolicy (converts dict to 'float32')
     if "dtype" in config and isinstance(config["dtype"], dict):
         if "config" in config["dtype"] and "name" in config["dtype"]["config"]:
             config["dtype"] = config["dtype"]["config"]["name"]
         else:
             config["dtype"] = "float32"
 
-    # Fix 2: Rename 'batch_shape' to 'input_shape'
+    # 2. Rename 'batch_shape' to 'input_shape' for compatibility
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
 
-    # Fix 3: Strip Keras 3 exclusive keywords that Keras 2 does not understand
-    # This prevents the 'Keyword argument not understood: sparse' error
+    # 3. Strip Keras 3-only metadata that causes 'keyword not understood' errors
     unwanted_keys = ["sparse", "ragged", "registered_name", "module"]
     for key in unwanted_keys:
         config.pop(key, None)
+
+    # 4. Routing Logic: If this is a specific subclass (like Conv2D), 
+    # we use the superclass method to ensure specific args (filters, etc.) are handled correctly.
+    if cls is not keras.layers.Layer:
+        return super(keras.layers.Layer, cls).from_config(config)
         
     return original_layer_from_config(config)
 
-# Apply the patch to the base Layer class so it covers Conv2D, Dense, Input, etc.
+# Apply the patch to the base Layer class
 keras.layers.Layer.from_config = patched_layer_from_config
 
 # --- 1. ENVIRONMENT CONFIGURATION ---
@@ -103,14 +107,13 @@ class CapsuleLayer(keras.layers.Layer):
 # --- 4. PREDICTION ENGINE ---
 def run_prediction(image_path):
     try:
-        # 1. Image Preprocessing
+        # Image Preprocessing
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB': 
             img = img.convert('RGB')
         img_array = np.array(img) / 255.0
         img_array = np.expand_dims(img_array.astype(np.float32), 0)
 
-        # 2. Setup Custom Objects
         custom_map = {
             'CapsuleLayer': CapsuleLayer, 
             'squash': squash, 
@@ -121,7 +124,7 @@ def run_prediction(image_path):
         binary_path = os.path.join(base_path, "binary_classifier_dataset_model.h5")
         severity_path = os.path.join(base_path, "severity_classifier_dataset_model.h5")
 
-        # 3. Load Binary Model
+        # Load Binary Model
         m_binary = keras.models.load_model(binary_path, custom_objects=custom_map, compile=False)
         preds_bin = m_binary.predict(img_array, verbose=0)[0]
         idx_bin = np.argmax(preds_bin)
@@ -134,7 +137,7 @@ def run_prediction(image_path):
         if not is_diseased:
             return "Healthy", None, conf_bin
 
-        # 4. Load Severity Model
+        # Load Severity Model
         m_severity = keras.models.load_model(severity_path, custom_objects=custom_map, compile=False)
         preds_sev = m_severity.predict(img_array, verbose=0)[0]
         stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
