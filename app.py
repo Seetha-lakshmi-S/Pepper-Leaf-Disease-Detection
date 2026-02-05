@@ -12,14 +12,10 @@ from markupsafe import Markup
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# --- 1. MEMORY OPTIMIZATION ---
+# --- 1. ENVIRONMENT & MEMORY PREP ---
+# We do NOT import TensorFlow here. It is handled inside predict_utils.py
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1' 
-
-import tensorflow as tf
-tf.config.threading.set_intra_op_parallelism_threads(1)
-tf.config.threading.set_inter_op_parallelism_threads(1)
-tf.keras.backend.clear_session()
 
 from predict_utils import run_prediction 
 pymysql.install_as_MySQLdb()
@@ -37,6 +33,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# Cloudinary Setup
 cloudinary.config( 
     cloud_name = "do7xycqmw", 
     api_key = "575413169736574", 
@@ -192,24 +189,21 @@ def get_panel(panel_name):
             data['entries'].sort(key=lambda x: x.timestamp)
             for idx, entry in enumerate(data['entries']): entry.is_followup = (idx != 0)
         return render_template('panels/history.html', history_data=history_data)
+    
     if panel_name.startswith('result/'):
         try:
             pred_id = int(panel_name.split('/')[1])
-            return get_result_panel(pred_id)
+            pred = Prediction.query.get_or_404(pred_id)
+            key = pred.severity if (pred.severity and pred.severity != "Healthy") else pred.result
+            info = DiseaseInfo.query.filter_by(name=key).first() or DiseaseInfo.query.first()
+            return render_template('panels/result.html', prediction=pred, info=info)
         except: pass
     return "Panel not found", 404
-
-@app.route('/get_panel/result/<int:prediction_id>')
-@login_required
-def get_result_panel(prediction_id):
-    pred = Prediction.query.get_or_404(prediction_id)
-    key = pred.severity if (pred.severity and pred.severity != "Healthy") else pred.result
-    info = DiseaseInfo.query.filter_by(name=key).first() or DiseaseInfo.query.first()
-    return render_template('panels/result.html', prediction=pred, info=info)
 
 @app.route('/result/<int:prediction_id>')
 @login_required
 def show_result(prediction_id):
+    # This matches your dashboard JS logic to switch panels
     return redirect(url_for('dashboard') + f'#result-{prediction_id}')
 
 @app.route('/diagnose', methods=['POST'])
@@ -219,20 +213,39 @@ def diagnose():
         plant_id = request.form.get('plant_id')
         f = request.files.get('leaf_image')
         if not f: return jsonify({'success': False, 'message': 'No file'})
+        
+        # 1. Save locally for the prediction function
         filename = secure_filename(f"{datetime.now().timestamp()}_{f.filename}")
         local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         f.save(local_path)
-        upload_result = cloudinary.uploader.upload(local_path, folder="pepguard_uploads")
+        
+        # 2. Run Prediction (Memory Intensive - handles sequential load/unload)
         disease, stage, conf = run_prediction(local_path)
+        
+        # 3. Upload to Cloudinary
+        upload_result = cloudinary.uploader.upload(local_path, folder="pepguard_uploads")
+        
+        # 4. Save Record
         new_pred = Prediction(
-            user_id=current_user.id, plant_id=plant_id, image_filename=upload_result['secure_url'],
-            result=disease, severity=stage, confidence=conf, timestamp=get_ist_time()
+            user_id=current_user.id, 
+            plant_id=plant_id, 
+            image_filename=upload_result['secure_url'],
+            result=disease, 
+            severity=stage, 
+            confidence=conf, 
+            timestamp=get_ist_time()
         )
         db.session.add(new_pred)
         db.session.commit()
+        
+        # 5. Cleanup local storage
         if os.path.exists(local_path): os.remove(local_path)
+        
         return jsonify({'success': True, 'redirect': url_for('show_result', prediction_id=new_pred.id)})
-    except Exception as e: return jsonify({'success': False, 'message': str(e)})
+    
+    except Exception as e: 
+        print(f"Diagnose Error: {e}")
+        return jsonify({'success': False, 'message': "Memory limit reached. Please try again in 30 seconds."})
 
 # --- 6. STARTUP ---
 with app.app_context():
