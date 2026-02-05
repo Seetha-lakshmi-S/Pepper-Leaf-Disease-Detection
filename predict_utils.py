@@ -1,22 +1,15 @@
-import sys
 import os
+import gc
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from PIL import Image
-import traceback
-import gc
 
-# --- 1. MEMORY & ENVIRONMENT OPTIMIZATION ---
-# Force CPU and disable heavy logging to save memory
+# Force CPU and clean logs for Render (512MB RAM)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-# Limit TensorFlow's memory footprint by restricting threads
-tf.config.threading.set_intra_op_parallelism_threads(1)
-tf.config.threading.set_inter_op_parallelism_threads(1)
-
-# --- 2. CUSTOM CAPSULE LAYERS ---
+# ----------------- REGISTER CUSTOM COMPONENTS -----------------
 @keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
@@ -59,84 +52,55 @@ class CapsuleLayer(keras.layers.Layer):
         config.update({'num_capsule': self.num_capsule, 'dim_capsule': self.dim_capsule, 'routings': self.routings})
         return config
 
-# --- 3. ARCHITECTURE BUILDER (BYPASSES CONFIG ERRORS) ---
-def build_capsule_net(num_classes):
-    """
-    Manually reconstructs the architecture. 
-    Ensure these parameters match your training script exactly.
-    """
-    inputs = keras.Input(shape=(128, 128, 3))
-    
-    # Feature Extraction
-    x = keras.layers.Conv2D(128, 3, padding='same')(inputs)
-    x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Activation('relu')(x)
-    x = keras.layers.MaxPooling2D()(x)
-    
-    x = keras.layers.Conv2D(256, 3, padding='same')(x)
-    x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Activation('relu')(x)
-    x = keras.layers.MaxPooling2D()(x)
-    
-    # Primary Capsules (Kernel 9, Stride 2 is standard for CapsNet)
-    x = keras.layers.Conv2D(8 * 32, kernel_size=9, strides=2, padding='valid')(x)
-    x = keras.layers.Reshape(target_shape=(-1, 8))(x)
-    primary_caps = keras.layers.Lambda(squash)(x)
-    
-    # Digit Capsules
-    digit_caps = CapsuleLayer(num_capsule=num_classes, dim_capsule=16, routings=3)(primary_caps)
-    outputs = keras.layers.Lambda(capsule_length)(digit_caps)
-    
-    return keras.Model(inputs, outputs)
+# ----------------- PREDICTION ENGINE -----------------
 
-# --- 4. PREDICTION ENGINE ---
 def run_prediction(image_path):
     try:
-        # Preprocess Image
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB': img = img.convert('RGB')
-        img_array = np.array(img) / 255.0
-        img_array = np.expand_dims(img_array.astype(np.float32), 0)
+        img_array = np.array(img).astype('float32') / 255.0
+        img_array = np.expand_dims(img_array, 0)
 
-        base_path = os.path.dirname(os.path.abspath(__file__))
+        custom_map = {"CapsuleLayer": CapsuleLayer, "squash": squash, "capsule_length": capsule_length}
 
-        # --- PHASE 1: BINARY CLASSIFICATION ---
-        model = build_capsule_net(num_classes=2)
-        model.load_weights(os.path.join(base_path, "binary_classifier_dataset_model.h5"))
+        # --- STAGE 1: BINARY (Routings=2) ---
+        m_bin = keras.models.load_model("binary_classifier_dataset_model.keras", 
+                                       custom_objects=custom_map, 
+                                       compile=False)
         
-        preds = model.predict(img_array, verbose=0)[0]
-        # Class 0=Diseased, 1=Healthy (Verify this index with your training!)
-        is_diseased = (np.argmax(preds) == 0)
-        confidence = float(np.max(preds))
+        raw_bin = m_bin.predict(img_array, verbose=0)[0]
+        bin_probs = tf.nn.softmax(raw_bin).numpy()
+        bin_idx = np.argmax(bin_probs)
+        is_diseased = (bin_idx == 0) 
+        bin_conf = float(bin_probs[bin_idx])
 
-        # 🔥 AGGRESSIVE MEMORY CLEANUP
-        del model
+        del m_bin
         keras.backend.clear_session()
         gc.collect()
 
         if not is_diseased:
-            return "Healthy", None, confidence
+            return "Healthy", None, bin_conf
 
-        # --- PHASE 2: SEVERITY CLASSIFICATION ---
-        model = build_capsule_net(num_classes=3)
-        model.load_weights(os.path.join(base_path, "severity_classifier_dataset_model.h5"))
+        # --- STAGE 2: SEVERITY (Routings=3) ---
+        m_sev = keras.models.load_model("severity_classifier_dataset_model.keras", 
+                                       custom_objects=custom_map, 
+                                       compile=False)
         
-        preds = model.predict(img_array, verbose=0)[0]
+        raw_sev = m_sev.predict(img_array, verbose=0)[0]
+        sev_probs = tf.nn.softmax(raw_sev).numpy()
+        
         stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
-        res_stage = stages[np.argmax(preds)]
-        res_conf = float(np.max(preds))
+        sev_idx = np.argmax(sev_probs)
+        
+        res_stage = stages[sev_idx]
+        res_conf = float(sev_probs[sev_idx])
 
-        # FINAL CLEANUP
-        del model
+        del m_sev
         keras.backend.clear_session()
         gc.collect()
 
         return ("Bacterial Disease", res_stage, res_conf)
 
     except Exception as e:
-        print(f"❌ Prediction Engine Error: {e}")
-        traceback.print_exc()
-        # Ensure session is cleared even on fail
-        keras.backend.clear_session()
-        gc.collect()
+        print(f"Error: {e}")
         return "PredictionError", None, 0.0
