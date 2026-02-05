@@ -12,8 +12,8 @@ from markupsafe import Markup
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# --- 1. ENVIRONMENT & MEMORY PREP ---
-# We do NOT import TensorFlow here. It is handled inside predict_utils.py
+# --- 1. MEMORY OPTIMIZATION ---
+# We do NOT import TensorFlow here to save RAM during startup.
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1' 
 
@@ -33,7 +33,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Cloudinary Setup
 cloudinary.config( 
     cloud_name = "do7xycqmw", 
     api_key = "575413169736574", 
@@ -66,7 +65,7 @@ def nl2br(value):
     if not value: return ""
     return Markup("<br>".join(str(value).splitlines()))
 
-# --- 4. MODELS ---
+# --- 4. DATABASE MODELS ---
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
@@ -158,11 +157,12 @@ def logout():
 def dashboard():
     return render_template('layout.html')
 
-@app.route('/get_panel/<panel_name>')
+@app.route('/get_panel/<path:panel_name>')
 @login_required
 def get_panel(panel_name):
     if panel_name == 'welcome':
         return render_template('panels/welcome.html')
+    
     elif panel_name == 'summary':
         all_preds = Prediction.query.filter_by(user_id=current_user.id).all()
         latest = {p.plant_id: p for p in all_preds}
@@ -177,8 +177,10 @@ def get_panel(panel_name):
                 elif 'advanced' in sev: summary['advanced'] += 1
                 else: summary['mid'] += 1
         return render_template('panels/summary.html', summary=summary)
+    
     elif panel_name == 'new_diagnosis':
         return render_template('panels/new_diagnosis.html')
+    
     elif panel_name == 'history':
         base = Prediction.query.filter_by(user_id=current_user.id).all()
         history_data = {}
@@ -189,21 +191,31 @@ def get_panel(panel_name):
             data['entries'].sort(key=lambda x: x.timestamp)
             for idx, entry in enumerate(data['entries']): entry.is_followup = (idx != 0)
         return render_template('panels/history.html', history_data=history_data)
-    
-    if panel_name.startswith('result/'):
+
+    # FIXED: Handled result panels with ID
+    elif panel_name.startswith('result/'):
         try:
-            pred_id = int(panel_name.split('/')[1])
+            pred_id = int(panel_name.split('/')[-1])
             pred = Prediction.query.get_or_404(pred_id)
-            key = pred.severity if (pred.severity and pred.severity != "Healthy") else pred.result
-            info = DiseaseInfo.query.filter_by(name=key).first() or DiseaseInfo.query.first()
+            
+            # Use severity (Early/Mid/Advanced) if it exists, else use result (Healthy)
+            search_name = pred.severity if (pred.severity and pred.severity != "Healthy") else pred.result
+            info = DiseaseInfo.query.filter_by(name=search_name).first()
+            
+            # Fallback to general disease info if specific stage isn't found
+            if not info:
+                info = DiseaseInfo.query.filter_by(name="Bacterial Disease").first() or DiseaseInfo.query.first()
+                
             return render_template('panels/result.html', prediction=pred, info=info)
-        except: pass
+        except Exception as e:
+            print(f"Panel Fetch Error: {e}")
+            return "Internal Server Error", 500
+
     return "Panel not found", 404
 
 @app.route('/result/<int:prediction_id>')
 @login_required
 def show_result(prediction_id):
-    # This matches your dashboard JS logic to switch panels
     return redirect(url_for('dashboard') + f'#result-{prediction_id}')
 
 @app.route('/diagnose', methods=['POST'])
@@ -212,20 +224,20 @@ def diagnose():
     try:
         plant_id = request.form.get('plant_id')
         f = request.files.get('leaf_image')
-        if not f: return jsonify({'success': False, 'message': 'No file'})
+        if not f: return jsonify({'success': False, 'message': 'No file uploaded'})
         
-        # 1. Save locally for the prediction function
+        # Save locally for prediction
         filename = secure_filename(f"{datetime.now().timestamp()}_{f.filename}")
         local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         f.save(local_path)
         
-        # 2. Run Prediction (Memory Intensive - handles sequential load/unload)
+        # Core Prediction (Memory Optimized)
         disease, stage, conf = run_prediction(local_path)
         
-        # 3. Upload to Cloudinary
+        # Upload to Cloudinary
         upload_result = cloudinary.uploader.upload(local_path, folder="pepguard_uploads")
         
-        # 4. Save Record
+        # Save to DB
         new_pred = Prediction(
             user_id=current_user.id, 
             plant_id=plant_id, 
@@ -238,14 +250,14 @@ def diagnose():
         db.session.add(new_pred)
         db.session.commit()
         
-        # 5. Cleanup local storage
+        # Cleanup
         if os.path.exists(local_path): os.remove(local_path)
         
         return jsonify({'success': True, 'redirect': url_for('show_result', prediction_id=new_pred.id)})
     
     except Exception as e: 
         print(f"Diagnose Error: {e}")
-        return jsonify({'success': False, 'message': "Memory limit reached. Please try again in 30 seconds."})
+        return jsonify({'success': False, 'message': "Memory limit reached. Please try again."})
 
 # --- 6. STARTUP ---
 with app.app_context():
