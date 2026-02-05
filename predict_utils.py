@@ -6,12 +6,12 @@ from PIL import Image
 import os
 import traceback
 
-# --- 1. COMPATIBILITY BRIDGE (AGGRESSIVE SHIM) ---
+# --- 1. COMPATIBILITY BRIDGE (NUKE PATCH) ---
 import keras.models
 import keras.layers
 import keras.saving
 
-# Map Keras 3 internal paths to Keras 2
+# Redirect internal Keras 3 paths to Keras 2
 sys.modules["keras.src"] = keras
 sys.modules["keras.src.models"] = keras.models
 sys.modules["keras.src.layers"] = keras.layers
@@ -21,46 +21,63 @@ original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
 def patched_layer_from_config(cls, config):
-    # A. Clean Keras 3 Metadata
+    """
+    Cleans and routes layer configurations to prevent 
+    'Keyword argument not understood' errors.
+    """
+    # A. Standardize Keras 3 metadata for Keras 2
     if "dtype" in config and isinstance(config["dtype"], dict):
         config["dtype"] = config["dtype"].get("config", {}).get("name", "float32")
     
+    # Remove Keras 3 keys that break the base Layer constructor
     for key in ["sparse", "ragged", "registered_name", "module"]:
         config.pop(key, None)
     
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
 
-    # B. IDENTIFY CONV2D LAYERS
+    # B. Extract layer identity
     layer_name = config.get('name', '').lower()
     class_name = config.get('class_name', '').lower()
     is_conv = 'conv2d' in layer_name or 'conv2d' in class_name
 
-    # C. THE AGGRESSIVE BYPASS
-    # If the base Layer class is trying to load a Conv2D, we handle it manually
+    # C. AGGRESSIVE CONV2D ROUTING
     if cls is keras.layers.Layer and is_conv:
-        # Extract filters (checking both Keras 2 and 3 naming conventions)
-        filters = config.pop('filters', config.pop('num_filters', None))
+        # Pull essential params and remove them from the config dict
+        f = config.pop('filters', config.pop('num_filters', 32))
+        k = config.pop('kernel_size', (3, 3))
+        s = config.pop('strides', (1, 1))
+        p = config.pop('padding', 'same')
+        act = config.pop('activation', 'linear')
         
-        if filters is not None:
-            # Manually construct the layer to bypass base Layer class errors
-            return keras.layers.Conv2D(
-                filters=filters,
-                kernel_size=config.get('kernel_size', (3,3)),
-                strides=config.get('strides', (1,1)),
-                padding=config.get('padding', 'same'),
-                activation=config.get('activation', 'linear'),
-                use_bias=config.get('use_bias', True),
-                name=config.get('name')
-            )
+        # Manually return a fresh Conv2D instance
+        return keras.layers.Conv2D(
+            filters=f, 
+            kernel_size=k, 
+            strides=s, 
+            padding=p, 
+            activation=act,
+            name=config.get('name')
+        )
 
-    # Fallback to original loader for all other cases
+    # D. FINAL SAFETY CLEANUP
+    # If falling back to original loader, we MUST strip keys 
+    # that the base Layer class doesn't understand.
+    config.pop('filters', None)
+    config.pop('num_filters', None)
+    config.pop('kernel_size', None)
+    config.pop('strides', None)
+    config.pop('padding', None)
+    config.pop('data_format', None)
+    config.pop('dilation_rate', None)
+    config.pop('groups', None)
+    
     return original_layer_from_config(config)
 
 # Apply global patch
 keras.layers.Layer.from_config = patched_layer_from_config
 
-# --- 2. CUSTOM CAPSULE LAYERS ---
+# --- 2. CUSTOM LAYERS ---
 @keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
@@ -103,7 +120,7 @@ class CapsuleLayer(keras.layers.Layer):
         config.update({'num_capsule': self.num_capsule, 'dim_capsule': self.dim_capsule, 'routings': self.routings})
         return config
 
-# --- 3. PREDICTION LOGIC ---
+# --- 3. PREDICTION ENGINE ---
 def run_prediction(image_path):
     try:
         # Preprocessing
@@ -134,5 +151,6 @@ def run_prediction(image_path):
         return ("Bacterial Disease", stages[np.argmax(p_sev)], float(p_sev[np.argmax(p_sev)]))
 
     except Exception as e:
+        print("❌ PREDICTION FAILED:")
         traceback.print_exc()
         return "PredictionError", None, 0.0
