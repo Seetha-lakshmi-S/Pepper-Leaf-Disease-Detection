@@ -6,57 +6,47 @@ from PIL import Image
 import os
 import traceback
 
-# --- 0. THE COMPATIBILITY BRIDGE (KERAS 3 TO 2 TRANSLATOR) ---
+# --- COMPATIBILITY BRIDGE ---
 import keras.models
 import keras.layers
 import keras.saving
 
-# A. Redirect missing Keras 3 paths ('keras.src') to Keras 2 locations
 sys.modules["keras.src"] = keras
 sys.modules["keras.src.models"] = keras.models
-sys.modules["keras.src.models.functional"] = keras.models
 sys.modules["keras.src.layers"] = keras.layers
 sys.modules["keras.src.saving"] = keras.saving
 
-# B. THE SMART LAYER PATCHER (STABLE VERSION)
-# This intercepts configurations to clean out Keras 3 metadata without using super()
+# FIXED LAYER PATCHER
 original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
 def patched_layer_from_config(cls, config):
-    # 1. Clean DTypePolicy (converts dict to 'float32')
+    # 1. DType fix
     if "dtype" in config and isinstance(config["dtype"], dict):
-        if "config" in config["dtype"] and "name" in config["dtype"]["config"]:
-            config["dtype"] = config["dtype"]["config"]["name"]
-        else:
-            config["dtype"] = "float32"
-
-    # 2. Rename 'batch_shape' to 'input_shape' for compatibility
+        config["dtype"] = config["dtype"].get("config", {}).get("name", "float32")
+    
+    # 🔥 2. CONV2D FILTERS FIX (CRITICAL!)
+    if config.get('class_name') == 'Conv2D' and 'filters' in config:
+        config['num_filters'] = config.pop('filters')
+    
+    # 3. Batch shape
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
-
-    # 3. Strip Keras 3-only metadata that Keras 2 hates
+    
+    # 4. Strip Keras 3 metadata
     unwanted_keys = ["sparse", "ragged", "registered_name", "module"]
     for key in unwanted_keys:
         config.pop(key, None)
-
-    # 4. Routing Logic: 
-    # If we are in a subclass (like Conv2D) and it has its own logic, use it.
-    # Otherwise, use the original base Layer logic we captured earlier.
-    if cls is not keras.layers.Layer:
-        # Check if the class has its own specific from_config implementation
-        return original_layer_from_config(config)
-        
+    
     return original_layer_from_config(config)
 
-# Apply the patch to the base Layer class
 keras.layers.Layer.from_config = patched_layer_from_config
 
-# --- 1. ENVIRONMENT CONFIGURATION ---
+# --- ENVIRONMENT ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-# --- 2. GLOBAL CUSTOM FUNCTIONS ---
+# --- CUSTOM FUNCTIONS ---
 @keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
@@ -67,7 +57,7 @@ def squash(vectors, axis=-1):
 def capsule_length(vectors):
     return tf.sqrt(tf.reduce_sum(tf.square(vectors), axis=-1) + keras.backend.epsilon())
 
-# --- 3. CUSTOM CAPSULE LAYER ---
+# --- CAPSULE LAYER (YOUR CODE PERFECT) ---
 @keras.utils.register_keras_serializable(package="Custom")
 class CapsuleLayer(keras.layers.Layer):
     def __init__(self, num_capsule, dim_capsule, routings=3, **kwargs):
@@ -106,10 +96,9 @@ class CapsuleLayer(keras.layers.Layer):
         })
         return config
 
-# --- 4. PREDICTION ENGINE ---
+# --- PREDICTION ENGINE (PERFECT) ---
 def run_prediction(image_path):
     try:
-        # Image Preprocessing
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB': 
             img = img.convert('RGB')
@@ -126,7 +115,7 @@ def run_prediction(image_path):
         binary_path = os.path.join(base_path, "binary_classifier_dataset_model.h5")
         severity_path = os.path.join(base_path, "severity_classifier_dataset_model.h5")
 
-        # Load Binary Model
+        # BINARY MODEL
         m_binary = keras.models.load_model(binary_path, custom_objects=custom_map, compile=False)
         preds_bin = m_binary.predict(img_array, verbose=0)[0]
         idx_bin = np.argmax(preds_bin)
@@ -139,7 +128,7 @@ def run_prediction(image_path):
         if not is_diseased:
             return "Healthy", None, conf_bin
 
-        # Load Severity Model
+        # SEVERITY MODEL
         m_severity = keras.models.load_model(severity_path, custom_objects=custom_map, compile=False)
         preds_sev = m_severity.predict(img_array, verbose=0)[0]
         stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
