@@ -1,9 +1,22 @@
+import sys
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 from PIL import Image
 import os
 import traceback
+
+# --- 0. THE REDIRECT SHIM (THE CRITICAL FIX) ---
+# This tricks the model into finding Keras 3 paths in a Keras 2 environment
+import keras.models
+import keras.layers
+import keras.saving
+
+sys.modules["keras.src"] = keras
+sys.modules["keras.src.models"] = keras.models
+sys.modules["keras.src.models.functional"] = keras.models
+sys.modules["keras.src.layers"] = keras.layers
+sys.modules["keras.src.saving"] = keras.saving
 
 # --- 1. ENVIRONMENT CONFIGURATION ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -41,7 +54,6 @@ class CapsuleLayer(keras.layers.Layer):
     def call(self, inputs):
         inputs_hat = tf.einsum('bji,jkio->bkjo', inputs, self.W)
         b = tf.zeros(shape=[tf.shape(inputs)[0], self.num_capsule, self.input_num_capsule])
-        
         for i in range(self.routings):
             c = tf.nn.softmax(b, axis=1)
             s_j = tf.einsum('bkl,bkld->bkd', c, inputs_hat)
@@ -53,75 +65,41 @@ class CapsuleLayer(keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config()
-        config.update({
-            'num_capsule': self.num_capsule,
-            'dim_capsule': self.dim_capsule,
-            'routings': self.routings
-        })
+        config.update({'num_capsule': self.num_capsule, 'dim_capsule': self.dim_capsule, 'routings': self.routings})
         return config
 
 # --- 4. PREDICTION ENGINE ---
 def run_prediction(image_path):
     try:
-        # Load and Preprocess Image
         img = Image.open(image_path).resize((128, 128))
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
+        if img.mode != 'RGB': img = img.convert('RGB')
         img_array = np.array(img) / 255.0
         img_array = np.expand_dims(img_array.astype(np.float32), 0)
 
-        # Map custom objects for Keras loader
-        custom_map = {
-            'CapsuleLayer': CapsuleLayer,
-            'squash': squash,
-            'capsule_length': capsule_length
-        }
-
+        custom_map = {'CapsuleLayer': CapsuleLayer, 'squash': squash, 'capsule_length': capsule_length}
         base_path = os.path.dirname(os.path.abspath(__file__))
         
-        # CHANGED: Now pointing to the universal .h5 files
         binary_path = os.path.join(base_path, "binary_classifier_dataset_model.h5")
         severity_path = os.path.join(base_path, "severity_classifier_dataset_model.h5")
 
-        # --- STEP 1: BINARY DIAGNOSIS ---
-        if not os.path.exists(binary_path):
-            raise FileNotFoundError(f"Binary model missing at {binary_path}")
-
-        m_binary = keras.models.load_model(
-            binary_path, 
-            custom_objects=custom_map, 
-            compile=False
-        )
-        
+        # Load Binary Model
+        m_binary = keras.models.load_model(binary_path, custom_objects=custom_map, compile=False)
         preds_bin = m_binary.predict(img_array, verbose=0)[0]
         idx_bin = np.argmax(preds_bin)
-        
-        # Logic: 0 = Diseased, 1 = Healthy
-        is_diseased = (idx_bin == 0) 
+        is_diseased = (idx_bin == 0)
         conf_bin = float(preds_bin[idx_bin])
-
+        
         del m_binary
         keras.backend.clear_session()
 
         if not is_diseased:
             return "Healthy", None, conf_bin
 
-        # --- STEP 2: SEVERITY STAGING ---
-        if not os.path.exists(severity_path):
-            return "Bacterial Disease", "Unknown Stage", conf_bin
-
-        m_severity = keras.models.load_model(
-            severity_path, 
-            custom_objects=custom_map, 
-            compile=False
-        )
-        
+        # Load Severity Model
+        m_severity = keras.models.load_model(severity_path, custom_objects=custom_map, compile=False)
         preds_sev = m_severity.predict(img_array, verbose=0)[0]
-        idx_sev = np.argmax(preds_sev)
-        
-        stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
-        res_stage = stages[idx_sev]
-        conf_sev = float(preds_sev[idx_sev])
+        res_stage = ["Early Stage", "Mid Stage", "Advanced Stage"][np.argmax(preds_sev)]
+        conf_sev = float(preds_sev[np.argmax(preds_sev)])
 
         del m_severity
         keras.backend.clear_session()
