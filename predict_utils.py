@@ -19,26 +19,31 @@ sys.modules["keras.src.layers"] = keras.layers
 sys.modules["keras.src.saving"] = keras.saving
 
 # B. THE UNIVERSAL LAYER PATCHER
-# This intercepts configurations for ALL layers to fix DTypePolicy and batch_shape
+# This intercepts configurations for ALL layers to clean out Keras 3 metadata
 original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
 def patched_layer_from_config(cls, config):
-    # Fix 1: Convert complex DTypePolicy back to a simple string (fixes Conv2D error)
+    # Fix 1: Convert complex DTypePolicy back to a simple string
     if "dtype" in config and isinstance(config["dtype"], dict):
-        # Extract 'float32' from the Keras 3 DTypePolicy dictionary
         if "config" in config["dtype"] and "name" in config["dtype"]["config"]:
             config["dtype"] = config["dtype"]["config"]["name"]
         else:
             config["dtype"] = "float32"
 
-    # Fix 2: Rename 'batch_shape' to 'input_shape' (fixes InputLayer error)
+    # Fix 2: Rename 'batch_shape' to 'input_shape'
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
+
+    # Fix 3: Strip Keras 3 exclusive keywords that Keras 2 does not understand
+    # This prevents the 'Keyword argument not understood: sparse' error
+    unwanted_keys = ["sparse", "ragged", "registered_name", "module"]
+    for key in unwanted_keys:
+        config.pop(key, None)
         
     return original_layer_from_config(config)
 
-# Apply the patch to the base Layer class
+# Apply the patch to the base Layer class so it covers Conv2D, Dense, Input, etc.
 keras.layers.Layer.from_config = patched_layer_from_config
 
 # --- 1. ENVIRONMENT CONFIGURATION ---
@@ -105,7 +110,7 @@ def run_prediction(image_path):
         img_array = np.array(img) / 255.0
         img_array = np.expand_dims(img_array.astype(np.float32), 0)
 
-        # 2. Setup paths and Custom Objects
+        # 2. Setup Custom Objects
         custom_map = {
             'CapsuleLayer': CapsuleLayer, 
             'squash': squash, 
