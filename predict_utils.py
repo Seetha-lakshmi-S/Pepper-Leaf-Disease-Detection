@@ -11,42 +11,45 @@ import keras.models
 import keras.layers
 import keras.saving
 
-# Redirect Keras 3 internal paths to Keras 2 locations
 sys.modules["keras.src"] = keras
 sys.modules["keras.src.models"] = keras.models
 sys.modules["keras.src.layers"] = keras.layers
 sys.modules["keras.src.saving"] = keras.saving
 
-# 🔥 THE PATCHER - Fixes Conv2D and cleans Keras 3 metadata
+# 🔥 THE "SILVER BULLET" PATCHER
+# This intercepts Conv2D layers so they don't crash the base Layer class
 original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
 def patched_layer_from_config(cls, config):
-    # 1. DType Fix (converts dict to string)
+    # A. DType Fix
     if "dtype" in config and isinstance(config["dtype"], dict):
         config["dtype"] = config["dtype"].get("config", {}).get("name", "float32")
     
-    # 2. CONV2D FIX - Keras 3 saves 'filters', but the shim expects 'num_filters'
-    layer_name = config.get('name', '').lower()
-    if 'conv2d' in layer_name and 'filters' in config:
-        config['num_filters'] = config.pop('filters')
-    
-    # 3. Clean Keras 3 exclusive metadata
+    # B. Clean Keras 3 exclusive metadata
     for key in ["sparse", "ragged", "registered_name", "module"]:
         config.pop(key, None)
     
-    # 4. Input Shape Fix
+    # C. Input Shape Fix
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
+
+    # 🔥 D. MANUAL CLASS ROUTING (Solves kernel_size / filters errors)
+    layer_name = config.get('name', '').lower()
+    class_name = config.get('class_name', '').lower()
+
+    if 'conv2d' in layer_name or 'conv2d' in class_name:
+        # Standardize filters vs num_filters for the loader
+        if 'num_filters' in config:
+            config['filters'] = config.pop('num_filters')
+        # Bypass generic Layer class and use Conv2D's own loader
+        return keras.layers.Conv2D.from_config(config)
     
     return original_layer_from_config(config)
 
 keras.layers.Layer.from_config = patched_layer_from_config
 
-# --- 2. ENVIRONMENT & CUSTOM LAYERS ---
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-
+# --- 2. CUSTOM CAPSULE LAYERS ---
 @keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
