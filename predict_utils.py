@@ -6,78 +6,11 @@ from PIL import Image
 import os
 import traceback
 
-# --- 1. COMPATIBILITY BRIDGE (NUKE PATCH) ---
-import keras.models
-import keras.layers
-import keras.saving
+# --- 1. ENVIRONMENT & MEMORY OPTIMIZATION ---
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1' # Force CPU to save memory on Render
 
-# Redirect internal Keras 3 paths to Keras 2
-sys.modules["keras.src"] = keras
-sys.modules["keras.src.models"] = keras.models
-sys.modules["keras.src.layers"] = keras.layers
-sys.modules["keras.src.saving"] = keras.saving
-
-original_layer_from_config = keras.layers.Layer.from_config
-
-@classmethod
-def patched_layer_from_config(cls, config):
-    """
-    Cleans and routes layer configurations to prevent 
-    'Keyword argument not understood' errors.
-    """
-    # A. Standardize Keras 3 metadata for Keras 2
-    if "dtype" in config and isinstance(config["dtype"], dict):
-        config["dtype"] = config["dtype"].get("config", {}).get("name", "float32")
-    
-    # Remove Keras 3 keys that break the base Layer constructor
-    for key in ["sparse", "ragged", "registered_name", "module"]:
-        config.pop(key, None)
-    
-    if "batch_shape" in config:
-        config["input_shape"] = config.pop("batch_shape")
-
-    # B. Extract layer identity
-    layer_name = config.get('name', '').lower()
-    class_name = config.get('class_name', '').lower()
-    is_conv = 'conv2d' in layer_name or 'conv2d' in class_name
-
-    # C. AGGRESSIVE CONV2D ROUTING
-    if cls is keras.layers.Layer and is_conv:
-        # Pull essential params and remove them from the config dict
-        f = config.pop('filters', config.pop('num_filters', 32))
-        k = config.pop('kernel_size', (3, 3))
-        s = config.pop('strides', (1, 1))
-        p = config.pop('padding', 'same')
-        act = config.pop('activation', 'linear')
-        
-        # Manually return a fresh Conv2D instance
-        return keras.layers.Conv2D(
-            filters=f, 
-            kernel_size=k, 
-            strides=s, 
-            padding=p, 
-            activation=act,
-            name=config.get('name')
-        )
-
-    # D. FINAL SAFETY CLEANUP
-    # If falling back to original loader, we MUST strip keys 
-    # that the base Layer class doesn't understand.
-    config.pop('filters', None)
-    config.pop('num_filters', None)
-    config.pop('kernel_size', None)
-    config.pop('strides', None)
-    config.pop('padding', None)
-    config.pop('data_format', None)
-    config.pop('dilation_rate', None)
-    config.pop('groups', None)
-    
-    return original_layer_from_config(config)
-
-# Apply global patch
-keras.layers.Layer.from_config = patched_layer_from_config
-
-# --- 2. CUSTOM LAYERS ---
+# --- 2. CUSTOM CAPSULE MATH ---
 @keras.utils.register_keras_serializable(package="Custom")
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
@@ -120,37 +53,83 @@ class CapsuleLayer(keras.layers.Layer):
         config.update({'num_capsule': self.num_capsule, 'dim_capsule': self.dim_capsule, 'routings': self.routings})
         return config
 
-# --- 3. PREDICTION ENGINE ---
+# --- 3. THE NUCLEAR LOADER (ARCHITECTURAL REBUILD) ---
+def safe_load_model(model_path, num_classes):
+    """
+    Manual reconstruction of the Capsule Network. 
+    Matches standard CapsNet training for 128x128 images.
+    """
+    inputs = keras.Input(shape=(128, 128, 3))
+    
+    # Block 1: Feature Extraction
+    x = keras.layers.Conv2D(128, 3, padding='same')(inputs)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.Activation('relu')(x)
+    x = keras.layers.MaxPooling2D()(x)
+    
+    # Block 2: Higher Level Features
+    x = keras.layers.Conv2D(256, 3, padding='same')(x)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.Activation('relu')(x)
+    x = keras.layers.MaxPooling2D()(x)
+    
+    # Block 3: Primary Capsules (The Interface)
+    # Most CapsNets use a larger kernel here to define the 'parts' of the image
+    x = keras.layers.Conv2D(8 * 32, kernel_size=9, strides=2, padding='valid')(x)
+    x = keras.layers.Reshape(target_shape=(-1, 8))(x)
+    primary_caps = keras.layers.Lambda(squash)(x)
+    
+    # Block 4: Digit Capsules (The Classification)
+    digit_caps = CapsuleLayer(num_capsule=num_classes, dim_capsule=16, routings=3)(primary_caps)
+    outputs = keras.layers.Lambda(capsule_length)(digit_caps)
+    
+    model = keras.Model(inputs, outputs)
+    
+    # Load weights BYPASSING the corrupted .h5 config dictionary
+    model.load_weights(model_path)
+    return model
+
+# --- 4. PREDICTION ENGINE ---
 def run_prediction(image_path):
     try:
-        # Preprocessing
+        # Image Loading
         img = Image.open(image_path).resize((128, 128))
         if img.mode != 'RGB': img = img.convert('RGB')
         img_array = np.array(img) / 255.0
         img_array = np.expand_dims(img_array.astype(np.float32), 0)
 
-        custom_map = {'CapsuleLayer': CapsuleLayer, 'squash': squash, 'capsule_length': capsule_length}
         base_path = os.path.dirname(os.path.abspath(__file__))
         
-        # Load and Predict Binary
-        m_bin = keras.models.load_model(os.path.join(base_path, "binary_classifier_dataset_model.h5"), 
-                                        custom_objects=custom_map, compile=False)
+        # --- 1. BINARY PREDICTION ---
+        binary_path = os.path.join(base_path, "binary_classifier_dataset_model.h5")
+        m_bin = safe_load_model(binary_path, num_classes=2)
         p_bin = m_bin.predict(img_array, verbose=0)[0]
-        is_diseased = (np.argmax(p_bin) == 0)
+        
+        is_diseased = (np.argmax(p_bin) == 0) # Assumes Class 0 = Diseased
         conf_bin = float(p_bin[np.argmax(p_bin)])
-        del m_bin; keras.backend.clear_session()
+        
+        # Clear memory between models
+        del m_bin
+        keras.backend.clear_session()
 
         if not is_diseased:
             return "Healthy", None, conf_bin
 
-        # Load and Predict Severity
-        m_sev = keras.models.load_model(os.path.join(base_path, "severity_classifier_dataset_model.h5"), 
-                                        custom_objects=custom_map, compile=False)
+        # --- 2. SEVERITY PREDICTION ---
+        severity_path = os.path.join(base_path, "severity_classifier_dataset_model.h5")
+        m_sev = safe_load_model(severity_path, num_classes=3)
         p_sev = m_sev.predict(img_array, verbose=0)[0]
+        
         stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
-        return ("Bacterial Disease", stages[np.argmax(p_sev)], float(p_sev[np.argmax(p_sev)]))
+        res_stage = stages[np.argmax(p_sev)]
+        conf_sev = float(p_sev[np.argmax(p_sev)])
+        
+        del m_sev
+        keras.backend.clear_session()
+
+        return ("Bacterial Disease", res_stage, conf_sev)
 
     except Exception as e:
-        print("❌ PREDICTION FAILED:")
+        print(f"❌ CRITICAL FAILURE in Prediction Engine: {e}")
         traceback.print_exc()
         return "PredictionError", None, 0.0
