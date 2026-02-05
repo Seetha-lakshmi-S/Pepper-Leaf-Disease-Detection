@@ -18,8 +18,8 @@ sys.modules["keras.src.models.functional"] = keras.models
 sys.modules["keras.src.layers"] = keras.layers
 sys.modules["keras.src.saving"] = keras.saving
 
-# B. THE SMART LAYER PATCHER
-# This intercepts configurations to clean out Keras 3 metadata only where safe
+# B. THE SMART LAYER PATCHER (STABLE VERSION)
+# This intercepts configurations to clean out Keras 3 metadata without using super()
 original_layer_from_config = keras.layers.Layer.from_config
 
 @classmethod
@@ -35,15 +35,17 @@ def patched_layer_from_config(cls, config):
     if "batch_shape" in config:
         config["input_shape"] = config.pop("batch_shape")
 
-    # 3. Strip Keras 3-only metadata that causes 'keyword not understood' errors
+    # 3. Strip Keras 3-only metadata that Keras 2 hates
     unwanted_keys = ["sparse", "ragged", "registered_name", "module"]
     for key in unwanted_keys:
         config.pop(key, None)
 
-    # 4. Routing Logic: If this is a specific subclass (like Conv2D), 
-    # we use the superclass method to ensure specific args (filters, etc.) are handled correctly.
+    # 4. Routing Logic: 
+    # If we are in a subclass (like Conv2D) and it has its own logic, use it.
+    # Otherwise, use the original base Layer logic we captured earlier.
     if cls is not keras.layers.Layer:
-        return super(keras.layers.Layer, cls).from_config(config)
+        # Check if the class has its own specific from_config implementation
+        return original_layer_from_config(config)
         
     return original_layer_from_config(config)
 
