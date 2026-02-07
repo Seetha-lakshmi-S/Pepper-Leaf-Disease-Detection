@@ -1,31 +1,36 @@
 import os
 import gc
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps, ImageFilter
 
-# Force CPU-only and minimize logs before any TF logic starts
+# 1. RENDER OPTIMIZATION: Force CPU only and minimize memory fragmentation
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 os.environ['TF_FORCE_CPU_FOR_DEVICE'] = '1'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 def run_prediction(image_path):
-    # 1. LAZY IMPORT: Don't load TF until we actually need to predict
+    """
+    Two-stage prediction: 
+    1. Binary (Diseased vs Healthy)
+    2. Severity (Early vs Mid vs Advanced)
+    """
+    # Lazy import to save initial RAM
     import tensorflow as tf
     from tensorflow import keras
     
-    # ----------------- RE-DECLARE CUSTOM COMPONENTS -----------------
-    # These must be inside the function or accessible here
-    @keras.utils.register_keras_serializable(package="Custom")
+    # ----------------- CUSTOM COMPONENTS (MATCHING TRAINING) -----------------
+    @keras.utils.register_keras_serializable(package="Project")
     def squash(vectors, axis=-1):
         s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
         scale = s_squared_norm / (1 + s_squared_norm) / tf.sqrt(s_squared_norm + keras.backend.epsilon())
         return scale * vectors
 
-    @keras.utils.register_keras_serializable(package="Custom")
-    def capsule_length(vectors):
+    @keras.utils.register_keras_serializable(package="Project")
+    def get_capsule_length(vectors):
         return tf.sqrt(tf.reduce_sum(tf.square(vectors), axis=-1) + keras.backend.epsilon())
 
-    @keras.utils.register_keras_serializable(package="Custom")
+    @keras.utils.register_keras_serializable(package="Project")
     class CapsuleLayer(keras.layers.Layer):
         def __init__(self, num_capsule, dim_capsule, routings=3, **kwargs):
             super(CapsuleLayer, self).__init__(**kwargs)
@@ -45,10 +50,10 @@ def run_prediction(image_path):
             b = tf.zeros(shape=[tf.shape(inputs)[0], self.num_capsule, self.input_num_capsule])
             for i in range(self.routings):
                 c = tf.nn.softmax(b, axis=1)
-                s_j = tf.einsum('bkl,bkld->bkd', c, inputs_hat)
+                s_j = tf.einsum('bki,bkio->bko', c, inputs_hat)
                 v_j = squash(s_j)
                 if i < self.routings - 1:
-                    agreement = tf.einsum('bkd,bkld->bkl', v_j, inputs_hat)
+                    agreement = tf.einsum('bko,bkio->bki', v_j, inputs_hat)
                     b += agreement
             return v_j
 
@@ -58,56 +63,69 @@ def run_prediction(image_path):
             return config
 
     try:
-        # 2. IMAGE PREPROCESSING
-        img = Image.open(image_path).resize((128, 128))
-        if img.mode != 'RGB': img = img.convert('RGB')
+        # ----------------- NOISE REDUCTION PIPELINE -----------------
+        # This ensures the model focuses on the leaf and ignores the background
+        img = Image.open(image_path).convert('RGB')
+        
+        # 1. Enhance Contrast: Makes lesions stand out from the green leaf
+        img = ImageOps.autocontrast(img, cutoff=1)
+        
+        # 2. Denoise: Smooths background textures while keeping disease spot edges
+        img = img.filter(ImageFilter.SMOOTH_MORE)
+        
+        # 3. Standard Resize
+        img = img.resize((128, 128))
         img_array = np.array(img).astype('float32') / 255.0
         img_array = np.expand_dims(img_array, 0)
 
-        custom_map = {"CapsuleLayer": CapsuleLayer, "squash": squash, "capsule_length": capsule_length}
+        # Mapping for Keras 3.x
+        custom_map = {
+            "CapsuleLayer": CapsuleLayer, 
+            "squash": squash, 
+            "get_capsule_length": get_capsule_length,
+            "margin_loss": lambda y_true, y_pred: y_pred 
+        }
 
-        # --- STAGE 1: BINARY ---
-        # Note: Use compile=False to avoid loading training state (Optimizer)
+        # ----------------- STAGE 1: BINARY -----------------
+        # Loading with compile=False and safe_mode=False is mandatory for Render/Keras3
         m_bin = keras.models.load_model("binary_classifier_dataset_model.keras", 
-                                        custom_objects=custom_map, 
-                                        compile=False)
+                                        custom_objects=custom_map, compile=False, safe_mode=False)
         
-        raw_bin = m_bin.predict(img_array, verbose=0)[0]
-        bin_probs = tf.nn.softmax(raw_bin).numpy()
+        bin_probs = m_bin.predict(img_array, verbose=0)[0]
         bin_idx = np.argmax(bin_probs)
-        is_diseased = (bin_idx == 0) 
+        
+        # Mapping based on folder alphabetical sort: [diseased, healthy]
+        # Index 0 = Diseased, Index 1 = Healthy
+        is_diseased = (bin_idx == 0)
         bin_conf = float(bin_probs[bin_idx])
 
-        # DESTROY BINARY MODEL IMMEDIATELY
+        # Cleanup Stage 1 from RAM
         del m_bin
-        keras.backend.clear_session()
         gc.collect()
 
         if not is_diseased:
-            return "Healthy", None, bin_conf
+            return "Healthy", "None", bin_conf
 
-        # --- STAGE 2: SEVERITY ---
+        # ----------------- STAGE 2: SEVERITY -----------------
         m_sev = keras.models.load_model("severity_classifier_dataset_model.keras", 
-                                        custom_objects=custom_map, 
-                                        compile=False)
+                                        custom_objects=custom_map, compile=False, safe_mode=False)
         
-        raw_sev = m_sev.predict(img_array, verbose=0)[0]
-        sev_probs = tf.nn.softmax(raw_sev).numpy()
+        sev_probs = m_sev.predict(img_array, verbose=0)[0]
         
-        stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
+        # Mapping based on folder alphabetical sort: [advanced, early, mid]
+        stages = ["Advanced Stage", "Early Stage", "Mid Stage"]
         sev_idx = np.argmax(sev_probs)
         
         res_stage = stages[sev_idx]
         res_conf = float(sev_probs[sev_idx])
 
-        # FINAL CLEANUP
+        # Final memory cleanup
         del m_sev
         keras.backend.clear_session()
         gc.collect()
 
-        return ("Bacterial Disease", res_stage, res_conf)
+        return "Diseased", res_stage, res_conf
 
     except Exception as e:
         gc.collect()
-        print(f"Prediction Error: {e}")
-        return "PredictionError", None, 0.0
+        return "Error", str(e), 0.0
