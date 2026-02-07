@@ -1,5 +1,6 @@
 import os
 import json
+import gc
 import pymysql
 import cloudinary
 import cloudinary.uploader
@@ -13,7 +14,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 # --- 1. MEMORY OPTIMIZATION ---
-# We do NOT import TensorFlow here to save RAM during startup.
+# Pre-set environment to stop TF from hogging RAM on startup
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1' 
 
@@ -192,24 +193,23 @@ def get_panel(panel_name):
             for idx, entry in enumerate(data['entries']): entry.is_followup = (idx != 0)
         return render_template('panels/history.html', history_data=history_data)
 
-    # FIXED: Handled result panels with ID
     elif panel_name.startswith('result/'):
         try:
             pred_id = int(panel_name.split('/')[-1])
             pred = Prediction.query.get_or_404(pred_id)
             
-            # Use severity (Early/Mid/Advanced) if it exists, else use result (Healthy)
-            search_name = pred.severity if (pred.severity and pred.severity != "Healthy") else pred.result
-            info = DiseaseInfo.query.filter_by(name=search_name).first()
+            # Logic: Try matching Stage name (e.g. "Early Stage") first, then Disease name
+            info = DiseaseInfo.query.filter_by(name=pred.severity).first()
+            if not info:
+                info = DiseaseInfo.query.filter_by(name=pred.result).first()
             
-            # Fallback to general disease info if specific stage isn't found
+            # Final fallback
             if not info:
                 info = DiseaseInfo.query.filter_by(name="Bacterial Disease").first() or DiseaseInfo.query.first()
                 
             return render_template('panels/result.html', prediction=pred, info=info)
         except Exception as e:
-            print(f"Panel Fetch Error: {e}")
-            return "Internal Server Error", 500
+            return f"Panel Fetch Error: {e}", 500
 
     return "Panel not found", 404
 
@@ -221,19 +221,22 @@ def show_result(prediction_id):
 @app.route('/diagnose', methods=['POST'])
 @login_required
 def diagnose():
+    local_path = None
     try:
         plant_id = request.form.get('plant_id')
         f = request.files.get('leaf_image')
         if not f: return jsonify({'success': False, 'message': 'No file uploaded'})
         
-        # Save locally for prediction
         filename = secure_filename(f"{datetime.now().timestamp()}_{f.filename}")
         local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         f.save(local_path)
         
-        # Core Prediction (Memory Optimized)
+        # Core Prediction (Sequential model loading happens inside here)
         disease, stage, conf = run_prediction(local_path)
         
+        if disease == "Error":
+             return jsonify({'success': False, 'message': f"Prediction Error: {stage}"})
+
         # Upload to Cloudinary
         upload_result = cloudinary.uploader.upload(local_path, folder="pepguard_uploads")
         
@@ -250,14 +253,17 @@ def diagnose():
         db.session.add(new_pred)
         db.session.commit()
         
-        # Cleanup
-        if os.path.exists(local_path): os.remove(local_path)
-        
         return jsonify({'success': True, 'redirect': url_for('show_result', prediction_id=new_pred.id)})
     
     except Exception as e: 
         print(f"Diagnose Error: {e}")
-        return jsonify({'success': False, 'message': "Memory limit reached. Please try again."})
+        return jsonify({'success': False, 'message': "System busy. Please try again."})
+    
+    finally:
+        # ABSOLUTE CLEANUP: Ensure file and memory are cleared even if prediction fails
+        if local_path and os.path.exists(local_path):
+            os.remove(local_path)
+        gc.collect()
 
 # --- 6. STARTUP ---
 with app.app_context():
