@@ -16,24 +16,36 @@ from markupsafe import Markup
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# --- 1. MEMORY OPTIMIZATION ---
-# Pre-set environment to stop TF from hogging RAM on startup
+# --- 1. MEMORY & DATABASE OPTIMIZATION ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1' 
 
+# Import our optimized lazy-loading utility
 from predict_utils import run_prediction 
+
 pymysql.install_as_MySQLdb()
 
 app = Flask(__name__)
 
 # --- 2. CONFIGURATION ---
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-123')
+
+# Database URL Fix
 db_url = os.environ.get('DATABASE_URL', 'mysql+pymysql://root:Seetha%40123@localhost/pepguard_db')
 if db_url and db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# FIX FOR SSL/NETWORK ERROR: Database Connection Management
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,  # Checks if connection is alive before using it
+    "pool_recycle": 280,    # Refreshes connection before Render/Heroku kills it (usually 300s)
+    "pool_size": 10,        # Limits number of open connections to save RAM
+    "max_overflow": 5
+}
+
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -96,7 +108,8 @@ class DiseaseInfo(db.Model):
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    # Using session.get instead of query.get for SQLAlchemy 2.0 compatibility
+    return db.session.get(User, int(user_id))
 
 def seed_database_from_json():
     try:
@@ -117,7 +130,8 @@ def seed_database_from_json():
                         follow_up=clean(item.get('follow_up', 'Monitor regularly.'))
                     ))
             db.session.commit()
-    except Exception as e: print(f"Seed Error: {e}")
+    except Exception as e: 
+        print(f"Seed Error: {e}")
 
 # --- 5. ROUTES ---
 @app.route('/')
@@ -199,7 +213,9 @@ def get_panel(panel_name):
     elif panel_name.startswith('result/'):
         try:
             pred_id = int(panel_name.split('/')[-1])
-            pred = Prediction.query.get_or_404(pred_id)
+            pred = db.session.get(Prediction, pred_id)
+            if not pred: return "Not found", 404
+            
             encoded_img = ""
             try:
                 resp = requests.get(pred.image_filename, timeout=5)
@@ -214,6 +230,7 @@ def get_panel(panel_name):
             
             if not info:
                 info = DiseaseInfo.query.filter_by(name="Bacterial Disease").first() or DiseaseInfo.query.first()
+                
             return render_template('panels/result.html', 
                                  prediction=pred, 
                                  info=info, 
@@ -241,16 +258,16 @@ def diagnose():
         local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         f.save(local_path)
         
-        # Core Prediction (Sequential model loading happens inside here)
+        # PREDICTION (Uses the lazy-loading logic from predict_utils)
         disease, stage, conf = run_prediction(local_path)
         
         if disease == "Error":
              return jsonify({'success': False, 'message': f"Prediction Error: {stage}"})
 
-        # Upload to Cloudinary
+        # CLOUDINARY UPLOAD
         upload_result = cloudinary.uploader.upload(local_path, folder="pepguard_uploads")
         
-        # Save to DB
+        # SAVE TO DB
         new_pred = Prediction(
             user_id=current_user.id, 
             plant_id=plant_id, 
@@ -270,7 +287,6 @@ def diagnose():
         return jsonify({'success': False, 'message': "System busy. Please try again."})
     
     finally:
-        # ABSOLUTE CLEANUP: Ensure file and memory are cleared even if prediction fails
         if local_path and os.path.exists(local_path):
             os.remove(local_path)
         gc.collect()
