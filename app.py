@@ -4,6 +4,9 @@ import gc
 import pymysql
 import cloudinary
 import cloudinary.uploader
+import base64
+import requests
+from io import BytesIO
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -197,17 +200,24 @@ def get_panel(panel_name):
         try:
             pred_id = int(panel_name.split('/')[-1])
             pred = Prediction.query.get_or_404(pred_id)
-            
-            # Logic: Try matching Stage name (e.g. "Early Stage") first, then Disease name
+            encoded_img = ""
+            try:
+                resp = requests.get(pred.image_filename, timeout=5)
+                if resp.status_code == 200:
+                    encoded_img = base64.b64encode(resp.content).decode('utf-8')
+            except Exception as e:
+                print(f"Image Encoding Error: {e}")
+
             info = DiseaseInfo.query.filter_by(name=pred.severity).first()
             if not info:
                 info = DiseaseInfo.query.filter_by(name=pred.result).first()
             
-            # Final fallback
             if not info:
                 info = DiseaseInfo.query.filter_by(name="Bacterial Disease").first() or DiseaseInfo.query.first()
-                
-            return render_template('panels/result.html', prediction=pred, info=info)
+            return render_template('panels/result.html', 
+                                 prediction=pred, 
+                                 info=info, 
+                                 image_base64=encoded_img)
         except Exception as e:
             return f"Panel Fetch Error: {e}", 500
 

@@ -981,7 +981,8 @@ ul {
     display: flex;
     align-items: stretch;
     border-bottom: 1px solid #f0f0f0;
-    min-height: 350px;
+    min-height : auto;
+    padding-bottom: 15px;
 }
 
 .report-visual {
@@ -995,12 +996,27 @@ ul {
     border-right: 1px solid #eef2f6;
 }
 
-.leaf-img-main {
-    max-height: 220px;
-    width: auto;
+.leaf-image-frame {
+    width: 100%;
     max-width: 100%;
+    display: flex;
+    justify-content: center; /* Centers vertical images horizontally */
+    align-items: center;
+    background: #f8fafc;
     border-radius: 12px;
+    padding: 10px;
+    border: 1px solid #e2e8f0;
+    overflow: hidden;
+}
+
+.drp-result-img {
+    max-height: 350px !important; 
+    width: auto !important;
+    max-width: 100%;
     object-fit: contain;
+    border-radius: 8px;
+    display: block;
+    transition: transform 0.3s ease;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
 }
 
@@ -1733,5 +1749,31 @@ ul {
         flex-direction: column;
         align-items: flex-start;
         gap: 15px;
+    }
+}
+
+@media print {
+    .app-sidebar, .app-header, .result-page-header, .sidebar-overlay, .header-actions {
+        display: none !important; 
+    }
+    .main-content {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+    }
+    .result-report-card {
+        box-shadow: none !important;
+        border: none !important;
+    }
+    .drp-result-img {
+        max-height: 280px !important; /* Shrinks image slightly to fit all text on one page */
+    }
+    .prescription-box {
+        page-break-inside: avoid; /* Stops boxes from splitting between pages */
+        max-height: none !important;
+    }
+    .prescription-content {
+        overflow: visible !important;
+        max-height: none !important;
     }
 }

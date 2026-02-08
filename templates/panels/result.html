@@ -1,6 +1,3 @@
-<!-- RESULT PANEL: result.html / panels/result.html -->
-
-<!-- HEADER (visible on screen, NOT in PDF) -->
 <div class="result-page-header">
     <div class="header-text">
         <h2>🧬 Analysis Report</h2>
@@ -19,18 +16,18 @@
     </div>
 </div>
 
-<!-- ONLY THIS WRAPPER GOES TO PDF -->
 <div id="report-root" class="pdf-mode">
 
-    <!-- MAIN CARD -->
     <div class="result-report-card" id="printable-area">
         
-        <!-- TOP SECTION: Visuals & Diagnosis (Side-by-Side) -->
         <div class="report-top-section">
-            <!-- LEFT: Image -->
             <div class="report-visual">
                 <div class="leaf-image-frame">
-                    <img src="{{ prediction.image_filename }}" class="drp-result-img" alt="Diagnosis Image">
+                    {% if image_base64 %}
+                        <img src="data:image/jpeg;base64,{{ image_base64 }}" class="drp-result-img" alt="Diagnosis Image">
+                    {% else %}
+                        <img src="{{ prediction.image_filename }}" class="drp-result-img" alt="Diagnosis Image">
+                    {% endif %}
                 </div>
                 <div class="visual-meta">
                     <div class="meta-date">
@@ -43,11 +40,10 @@
                 </div>
             </div>
 
-            <!-- RIGHT: Diagnosis -->
             <div class="report-clinical">
                 <div class="diagnosis-block">
-                    <span class="label-small">Detected Condition</span>
-                    <h1 class="disease-title">{{ prediction.result }}</h1>
+                    [cite_start]<span class="label-small">Detected Condition [cite: 1]</span>
+                    [cite_start]<h1 class="disease-title">{{ prediction.result }} [cite: 2]</h1>
                     
                     <div class="badge-container">
                         {% if prediction.severity and prediction.severity != "Healthy" %}
@@ -56,18 +52,17 @@
                             </span>
                         {% else %}
                             <span class="badge badge-healthy badge-lg">
-                                Healthy Crop
+                                [cite_start]Healthy Crop [cite: 3]
                             </span>
                         {% endif %}
                     </div>
                 </div>
 
-                <!-- Confidence -->
                 <div class="confidence-wrapper">
                     <div class="confidence-row">
-                        <span class="conf-label">AI Confidence</span>
+                        [cite_start]<span class="conf-label">AI Confidence [cite: 4]</span>
                         <span class="conf-value">
-                            {{ '%.1f'|format(prediction.confidence * 100) }}%
+                            [cite_start]{{ '%.1f'|format(prediction.confidence * 100) }}% [cite: 9]
                         </span>
                     </div>
                     <div class="progress-track">
@@ -77,75 +72,66 @@
                     </div>
                 </div>
 
-                <!-- Description -->
                 <div class="disease-description-box">
-                    <p>{{ info.description }}</p>
+                    [cite_start]<p>{{ info.description }} [cite: 7]</p>
                 </div>
             </div>
         </div>
 
-        <!-- BOTTOM SECTION: Treatment Plan (Centered 3-Column Grid) -->
         <div class="treatment-section">
-            <h3 class="treatment-section-title">Recommended Treatment Plan</h3>
+            [cite_start]<h3 class="treatment-section-title">Recommended Treatment Plan [cite: 8]</h3>
             
             <div class="treatment-centered-container">
-                <!-- 1. Organic -->
                 <div class="prescription-box organic-box">
                     <div class="prescription-header">
                         <span class="box-icon">🍃</span>
-                        <h3>Organic</h3>
+                        [cite_start]<h3>Organic [cite: 10]</h3>
                     </div>
                     <div class="prescription-content" id="organic-res">
-                        {{ info.organic_treatment|nl2br }}
+                        [cite_start]{{ info.organic_treatment|nl2br }} [cite: 12, 14, 16, 17]
                     </div>
                 </div>
 
-                <!-- 2. Chemical -->
                 <div class="prescription-box chemical-box">
                     <div class="prescription-header">
                         <span class="box-icon">🧪</span>
-                        <h3>Chemical</h3>
+                        [cite_start]<h3>Chemical [cite: 18]</h3>
                     </div>
                     <div class="prescription-content" id="chem-res">
-                        {{ info.chemical_treatment|nl2br }}
+                        [cite_start]{{ info.chemical_treatment|nl2br }} [cite: 20, 22, 24, 26]
                     </div>
                 </div>
 
-                <!-- 3. Yield -->
                 <div class="prescription-box yield-box">
                     <div class="prescription-header">
                         <span class="box-icon">📈</span>
-                        <h3>Yield &amp; Recovery</h3>
+                        <h3>Yield &amp; [cite_start]Recovery [cite: 27]</h3>
                     </div>
                     <div class="prescription-content" id="yield-res">
-                        {{ info.yield_advice|nl2br }}
+                        [cite_start]{{ info.yield_advice|nl2br }} [cite: 28, 29, 30]
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- FOLLOW-UP SECTION -->
         <div class="treatment-section">
-            <h3 class="treatment-section-title">Follow-up &amp; Monitoring</h3>
+            <h3 class="treatment-section-title">Follow-up &amp; [cite_start]Monitoring [cite: 33]</h3>
             <div class="treatment-centered-container">
                 <div class="prescription-box followup-box">
                     <div class="prescription-header">
                         <span class="box-icon">🕒</span>
-                        <h3>Follow-up Plan</h3>
+                        [cite_start]<h3>Follow-up Plan [cite: 31]</h3>
                     </div>
                     <div class="prescription-content" id="followup-res">
-                        {{ info.follow_up|nl2br }}
+                        [cite_start]{{ info.follow_up|nl2br }} [cite: 34, 35, 36, 37, 38, 39, 40, 41]
                     </div>
                 </div>
             </div>
         </div>
 
-    </div> <!-- /result-report-card -->
-
-    <!-- PDF FOOTER (for bottom of page in PDF) -->
-    <div class="pdf-footer">
-        Generated by PepGuard AI ·
-        {{ prediction.timestamp | ist }}
+    </div> <div class="pdf-footer">
+        [cite_start]Generated by PepGuard AI [cite: 42] ·
+        [cite_start]{{ prediction.timestamp | ist }} [cite: 5, 42]
     </div>
 
-</div> <!-- /report-root -->
+</div> 
