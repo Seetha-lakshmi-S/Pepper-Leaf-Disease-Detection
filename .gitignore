@@ -23,7 +23,7 @@ static/uploads/*
 # System files
 .DS_Store
 Thumbs.db
-
+*.keras
 # Ignore heavy dataset folders
 dataset/
 dataset_preprocessed/

@@ -1,6 +1,7 @@
 import os
 import gc
 import numpy as np
+import urllib.request
 from PIL import Image, ImageOps, ImageFilter
 
 # --- RENDER & MEMORY OPTIMIZATION ---
@@ -8,16 +9,40 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 os.environ['TF_FORCE_CPU_FOR_DEVICE'] = '1'
 
+# --- 0. AUTO-DOWNLOAD CONFIGURATION ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BINARY_MODEL_PATH = os.path.join(BASE_DIR, "binary_classifier_dataset_model.keras")
+SEVERITY_MODEL_PATH = os.path.join(BASE_DIR, "severity_classifier_dataset_model.keras")
+
+def ensure_models_exist():
+    """Checks if models exist locally; if not, downloads from GitHub Release Assets."""
+    # These URLs point to your manual uploads in the 'Releases' tab
+    model_configs = {
+        BINARY_MODEL_PATH: "https://github.com/Seetha-lakshmi-S/Pepper-Leaf-Disease-Detection/releases/download/v2.0/binary_classifier_dataset_model.keras",
+        SEVERITY_MODEL_PATH: "https://github.com/Seetha-lakshmi-S/Pepper-Leaf-Disease-Detection/releases/download/v2.0/severity_classifier_dataset_model.keras"
+    }
+
+    for path, url in model_configs.items():
+        # Logic: If file doesn't exist OR it's a small LFS pointer (under 100KB), download real file
+        if not os.path.exists(path) or os.path.getsize(path) < 102400:
+            print(f"Model {os.path.basename(path)} missing or LFS pointer detected. Downloading real file...")
+            try:
+                # Bypass SSL if needed for Render environment
+                urllib.request.urlretrieve(url, path)
+                print(f"Successfully downloaded {os.path.basename(path)} ({os.path.getsize(path)} bytes)")
+            except Exception as e:
+                print(f"Download failed for {os.path.basename(path)}: {e}")
+
 def run_prediction(image_path):
-    """
-    Keras 3 Compatible Prediction Logic.
-    Bypasses serialization errors by using native Keras 3 imports.
-    """
+    """Keras 3 Compatible Prediction Logic with Release-Asset fallback."""
     import tensorflow as tf
     import keras
-    from keras import layers, ops
+    from keras import layers
 
-    # --- 1. MATCH TRAINING SCRIPT CUSTOM COMPONENTS ---
+    # 1. First, make sure the files are actually there
+    ensure_models_exist()
+
+    # --- MATCH TRAINING SCRIPT CUSTOM COMPONENTS ---
     @keras.utils.register_keras_serializable(package="Project")
     def squash(vectors, axis=-1):
         s_squared_norm = tf.reduce_sum(tf.square(vectors), axis, keepdims=True)
@@ -69,7 +94,6 @@ def run_prediction(image_path):
         img_array = np.array(img).astype('float32') / 255.0
         img_array = np.expand_dims(img_array, 0)
 
-        # Custom Map must match the 'package' names used in training
         custom_map = {
             "Project>CapsuleLayer": CapsuleLayer,
             "Project>squash": squash,
@@ -78,9 +102,8 @@ def run_prediction(image_path):
         }
 
         # --- 3. STAGE 1: BINARY ---
-        m_bin = keras.models.load_model("binary_classifier_dataset_model.keras", 
+        m_bin = keras.models.load_model(BINARY_MODEL_PATH, 
                                         custom_objects=custom_map, compile=False)
-        
         preds_bin = m_bin.predict(img_array, verbose=0)[0]
         bin_idx = np.argmax(preds_bin)
         bin_conf = float(preds_bin[bin_idx])
@@ -89,14 +112,12 @@ def run_prediction(image_path):
         keras.backend.clear_session()
         gc.collect()
 
-        # Assuming classes: [Diseased, Healthy]
         if bin_idx == 1:
             return "Healthy", "Healthy", bin_conf
 
         # --- 4. STAGE 2: SEVERITY ---
-        m_sev = keras.models.load_model("severity_classifier_dataset_model.keras", 
+        m_sev = keras.models.load_model(SEVERITY_MODEL_PATH, 
                                         custom_objects=custom_map, compile=False)
-        
         preds_sev = m_sev.predict(img_array, verbose=0)[0]
         stages = ["Early Stage", "Mid Stage", "Advanced Stage"]
         sev_idx = np.argmax(preds_sev)
@@ -112,5 +133,4 @@ def run_prediction(image_path):
 
     except Exception as e:
         gc.collect()
-        # Truncate error for DB safety
         return "Error", str(e)[:100], 0.0
