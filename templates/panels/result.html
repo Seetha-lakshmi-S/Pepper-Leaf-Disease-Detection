@@ -1,0 +1,140 @@
+<div class="result-page-header">
+    <div class="header-text">
+        <h2>🧬 Analysis Report</h2>
+        <p>AI Diagnosis Complete</p>
+    </div>
+    <div class="header-actions">
+        <button id="download-pdf-btn"
+                class="btn-outline"
+                data-plant-id="{{ prediction.plant_id }}">
+            <span>📥</span> Download Report
+        </button>
+        <button class="btn-secondary js-switch-panel result-scan-another"
+                data-panel="new_diagnosis">
+            <span>🔄</span> Scan Another
+        </button>
+    </div>
+</div>
+
+<div id="report-root" class="pdf-mode">
+
+    <div class="result-report-card" id="printable-area">
+        
+        <div class="report-top-section">
+            <div class="report-visual">
+                <div class="leaf-image-frame">
+                    {% if image_base64 %}
+                        <img src="data:image/jpeg;base64,{{ image_base64 }}" 
+                             class="drp-result-img" alt="Diagnosis Image" crossorigin="anonymous">
+                    {% else %}
+                        <img src="{{ prediction.image_filename }}" 
+                             class="drp-result-img" alt="Diagnosis Image" crossorigin="anonymous">
+                    {% endif %}
+                </div>
+                <div class="visual-meta">
+                    <div class="meta-date">
+                        <span>📅</span>
+                        {{ prediction.timestamp | ist }}
+                    </div>
+                    <div class="meta-id">
+                        Plant ID: {{ prediction.plant_id }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="report-clinical">
+                <div class="diagnosis-block">
+                    <span class="label-small">Detected Condition</span>
+                    <h1 class="disease-title">{{ prediction.result | clean_text }}</h1>
+                    
+                    <div class="badge-container">
+                        {% if prediction.severity and prediction.severity != "Healthy" %}
+                            <span class="badge badge-diseased badge-lg">
+                                {{ prediction.severity | clean_text }}
+                            </span>
+                        {% else %}
+                            <span class="badge badge-healthy badge-lg">
+                                Healthy Crop
+                            </span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="confidence-wrapper">
+                    <div class="confidence-row">
+                        <span class="conf-label">AI Confidence</span>
+                        <span class="conf-value">
+                            {{ '%.1f'|format(prediction.confidence * 100) }}%
+                        </span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill"
+                             style="--conf-width: {{ '%.1f'|format(prediction.confidence * 100) }}%;">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="disease-description-box">
+                    <p>{{ info.description | clean_text }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="treatment-section">
+            <h3 class="treatment-section-title">Recommended Treatment Plan</h3>
+            
+            <div class="treatment-centered-container">
+                <div class="prescription-box organic-box">
+                    <div class="prescription-header">
+                        <span class="box-icon">🍃</span>
+                        <h3>Organic</h3>
+                    </div>
+                    <div class="prescription-content" id="organic-res">
+                        {{ info.organic_treatment | clean_text | nl2br }}
+                    </div>
+                </div>
+
+                <div class="prescription-box chemical-box">
+                    <div class="prescription-header">
+                        <span class="box-icon">🧪</span>
+                        <h3>Chemical</h3>
+                    </div>
+                    <div class="prescription-content" id="chem-res">
+                        {{ info.chemical_treatment | clean_text | nl2br }}
+                    </div>
+                </div>
+
+                <div class="prescription-box yield-box">
+                    <div class="prescription-header">
+                        <span class="box-icon">📈</span>
+                        <h3>Yield & Recovery</h3>
+                    </div>
+                    <div class="prescription-content" id="yield-res">
+                        {{ info.yield_advice | clean_text | nl2br }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="treatment-section">
+            <h3 class="treatment-section-title">Follow-up & Monitoring</h3>
+            <div class="treatment-centered-container">
+                <div class="prescription-box followup-box">
+                    <div class="prescription-header">
+                        <span class="box-icon">🕒</span>
+                        <h3>Follow-up Plan</h3>
+                    </div>
+                    <div class="prescription-content" id="followup-res">
+                        {{ info.follow_up | clean_text | nl2br }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div> 
+    
+    <div class="pdf-footer">
+        Generated by PepGuard AI · {{ prediction.timestamp | ist }}
+    </div>
+
+</div>

@@ -1,0 +1,109 @@
+<div class="history-header-row">
+    <div class="panel-header-compact">
+        <h2>📋 Plant History</h2>
+        <p>Track health trends and add follow-up scans.</p>
+    </div>
+    
+    <form id="history-search-form" class="history-search-form" autocomplete="off" onsubmit="return false;">
+        <input type="text" id="history-search-input" class="search-input-modern" placeholder="🔍 Search Plant ID...">
+    </form>
+</div>
+
+<div id="history-container" class="history-feed">
+{% if history_data %}
+    {% for plant_id, data in history_data.items() %}
+        <div class="plant-history-card">
+            
+            <div class="plant-card-header">
+                <div class="plant-title-group">
+                    <div class="plant-icon-circle">🌱</div>
+                    <div>
+                        <h3>{{ plant_id }}</h3>
+                        <span class="entry-count">{{ data.entries|length }} Records</span>
+                    </div>
+                </div>
+                <button class="btn-small followup-btn" data-plant="{{ plant_id }}">
+                    🔁  Follow-up
+                </button>
+            </div>
+
+            <div class="timeline-scroll-area">
+                {% for entry in data.entries %}
+                    <div class="timeline-item">
+                        <div class="timeline-date">{{ entry.timestamp | ist }}</div>
+                        
+                        <div class="timeline-content">
+                            <div class="img-wrapper">
+                               <img src="{{ entry.image_filename }}" class="img-fluid rounded" alt="Plant Image">
+                            </div>
+                            
+                            <div class="timeline-details">
+                                <div class="status-badge-container">
+                                    {% if entry.result == 'Healthy' %}
+                                        <span class="badge badge-healthy">Healthy</span>
+                                    {% else %}
+                                        <span class="badge badge-diseased">{{ entry.result }}</span>
+                                        <div class="severity-box">
+                                            <span class="badge badge-warning">{{ entry.severity }}</span>
+                                        </div>
+                                    {% endif %}
+                                </div>
+
+                                <div class="conf-text" style="color: var(--text-gray); font-size: 0.85rem; margin: 4px 0;">
+                                    {{ '%.0f'|format(entry.confidence * 100) }}% Confidence
+                                </div>
+
+                                {% if entry.is_followup %}
+                                    <span class="followup-chip" title="Follow-up scan">🔁 Follow-up</span>
+                                {% endif %}
+
+                                <div class="timeline-footer-row">
+                                    <button 
+                                        class="btn-text-link js-switch-panel" 
+                                        data-panel="result-{{ entry.id }}">
+                                        View Report 📄
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {% if not loop.last %}
+                        <div class="timeline-connector">→</div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-state-card">
+        <div class="empty-icon">📂</div>
+        <h3>No History Found</h3>
+        <p>Upload a new diagnosis to start tracking your plants.</p>
+    </div>
+{% endif %}
+</div>
+
+<div id="followup-modal" class="modal modal-hidden">
+  <div class="modal-content">
+    <button id="close-followup-modal" class="modal-close">&times;</button>
+    <div class="modal-header-text">
+        <h3>New Follow-up</h3>
+        <p>Adding record to timeline for Plant ID: <b id="display-plant-id"></b></p>
+    </div>
+    <form id="followup-form" enctype="multipart/form-data">
+      <input type="hidden" id="followup-plant-id" name="plant_id" value="">
+      
+      <label for="followup_image" class="upload-label-modal">
+          <div class="upload-icon-modal">📷</div>
+          <p class="upload-text-modal">Tap to <b>Take Photo</b><br>or <b>Select from Gallery</b></p>
+          
+          <input type="file" name="leaf_image" id="followup_image" class="hidden-input" accept="image/*" required>
+          
+          <p id="followup-file-name" class="file-name-display"></p>
+      </label>
+
+      <button type="submit" class="btn-primary btn-full-width">Analyze Follow-up 🚀</button>
+    </form>
+  </div>
+</div>

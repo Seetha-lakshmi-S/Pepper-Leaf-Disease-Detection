@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log In - PepGuard</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='mascot.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="auth-body">
+    
+    <div class="auth-card">
+        <h2 class="auth-title">Welcome Back</h2>
+        <p class="auth-subtitle">Login to your PepGuard dashboard</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" placeholder="e.g. farmer123" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" placeholder="Enter password" required>
+            </div>
+            
+            <button type="submit" class="btn-block">Log In</button>
+        </form>
+
+        <div class="auth-footer">
+            New to PepGuard? <a href="{{ url_for('signup') }}">Create Account</a>
+        </div>
+    </div>
+
+</body>
+</html>
