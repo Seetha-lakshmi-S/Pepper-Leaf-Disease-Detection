@@ -137,24 +137,33 @@ def seed_database_from_json():
         if os.path.exists(json_path):
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            
             for item in data:
-                if not DiseaseInfo.query.filter_by(name=item['name']).first():
-                    # Seed logic uses strip_citations to prepare data correctly
-                    clean_fn = lambda v: strip_citations("\n".join(v) if isinstance(v, list) else v)
+                existing_disease = DiseaseInfo.query.filter_by(name=item['name']).first()
+                
+                if existing_disease:
+                    existing_disease.description = item.get('description')
+                    existing_disease.organic_treatment = item.get('organic_treatment')
+                    existing_disease.chemical_treatment = item.get('chemical_treatment')
+                    existing_disease.yield_advice = item.get('yield_advice')
+                    existing_disease.follow_up = item.get('follow_up')
+                else:
                     db.session.add(DiseaseInfo(
                         name=item['name'],
-                        description=clean_fn(item.get('description')),
-                        organic_treatment=clean_fn(item.get('organic_treatment')),
-                        chemical_treatment=clean_fn(item.get('chemical_treatment')),
-                        yield_advice=clean_fn(item.get('yield_advice')),
-                        follow_up=clean_fn(item.get('follow_up', 'Monitor.'))
+                        description=item.get('description'),
+                        organic_treatment=item.get('organic_treatment'),
+                        chemical_treatment=item.get('chemical_treatment'),
+                        yield_advice=item.get('yield_advice'),
+                        follow_up=item.get('follow_up')
                     ))
+            
             db.session.commit()
-    except Exception as e: print(f"Seed Error: {e}")
+            print("Database successfully synchronized with disease_data.json")
+    except Exception as e: 
+        print(f"Seed Error: {e}")
 
 @app.before_request
 def create_tables():
-    # Only run this once at startup
     app.before_request_funcs[None].remove(create_tables)
     db.create_all()
     seed_database_from_json()
