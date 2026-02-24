@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PepGuard – Healthy Pepper Fields</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='mascot.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="landing-body">
+
+    <nav class="landing-nav">
+        <a href="#" class="logo">🌶️ PepGuard</a>
+        <a href="{{ url_for('login') }}" class="btn-nav">Login</a>
+    </nav>
+
+    <div class="hero-container">
+        
+        <div class="hero-content">
+            <div class="hero-tag">Smart Agriculture AI</div>
+            <h1 class="hero-title">Protect Your Yield<br>with Smart Vision.</h1>
+            <p class="hero-text">
+                Your personal plant doctor. Upload a photo of your pepper leaves, detect diseases instantly, and get expert treatment advice.
+            </p>
+            <div>
+                <a href="{{ url_for('signup') }}" class="btn-cta">Start Protecting</a>
+            </div>
+        </div>
+
+        <div class="hero-image-box">
+            <img src="{{ url_for('static', filename='mascot.png') }}" alt="PepGuard Mascot" class="mascot-img">
+        </div>
+
+    </div>
+
+</body>
+</html>
