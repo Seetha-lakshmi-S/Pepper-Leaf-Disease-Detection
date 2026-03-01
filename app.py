@@ -126,12 +126,27 @@ def seed_database_from_json():
         if os.path.exists(json_path):
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            
             for item in data:
-                if not DiseaseInfo.query.filter_by(name=item['name']).first():
+                # 1. Check if the disease exists
+                existing_disease = DiseaseInfo.query.filter_by(name=item['name']).first()
+                
+                if existing_disease:
+                    # 2. UPDATE: If it exists, update the fields with new JSON data
+                    existing_disease.description = item.get('description')
+                    existing_disease.organic_treatment = item.get('organic_treatment')
+                    existing_disease.chemical_treatment = item.get('chemical_treatment')
+                    existing_disease.yield_advice = item.get('yield_advice')
+                    existing_disease.follow_up = item.get('follow_up')
+                else:
+                    # 3. INSERT: If it doesn't exist, create it
                     db.session.add(DiseaseInfo(**item))
+            
             db.session.commit()
-            print("Database synchronized.")
-    except Exception as e: print(f"Seed Error: {e}")
+            print("Database synchronized successfully.")
+    except Exception as e:
+        print(f"Seed Error: {e}")
+        db.session.rollback() 
 
 @app.before_request
 def create_tables():
@@ -234,6 +249,19 @@ def get_panel(panel_name):
             if p.plant_id not in history_data: history_data[p.plant_id] = {'entries': []}
             history_data[p.plant_id]['entries'].append(p)
         return render_template('panels/history.html', history_data=history_data)
+    elif panel_name == 'summary':
+            all_preds = Prediction.query.filter_by(user_id=current_user.id).all()
+            latest = {p.plant_id: p for p in all_preds}
+            summary = {"total_plants": len(latest), "healthy": 0, "early": 0, "mid": 0, "advanced": 0, "diseased_total": 0}
+            for p in latest.values():
+                if p.result == 'Healthy': summary['healthy'] += 1
+                else:
+                    summary['diseased_total'] += 1
+                    sev = (p.severity or "").lower()
+                    if 'early' in sev: summary['early'] += 1
+                    elif 'mid' in sev: summary['mid'] += 1
+                    elif 'advanced' in sev: summary['advanced'] += 1
+            return render_template('panels/summary.html', summary=summary)
     elif panel_name.startswith('result/'):
         pred_id = int(panel_name.split('/')[-1])
         pred = db.session.get(Prediction, pred_id)
